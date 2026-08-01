@@ -100,11 +100,16 @@ export class Runner {
     try {
       response = await agent.provider.generate(request);
     } catch (cause) {
-      const error = new ProviderError(
-        `Provider "${agent.provider.name}" failed to generate a response: ${
-          cause instanceof Error ? cause.message : String(cause)
-        }`,
-      );
+      // A subclass (see `src/providers/errors.ts`) already carries structured
+      // failure details, so it is rethrown unchanged rather than erased.
+      const error =
+        cause instanceof ProviderError
+          ? cause
+          : new ProviderError(
+              `Provider "${agent.provider.name}" failed to generate a response: ${
+                cause instanceof Error ? cause.message : String(cause)
+              }`,
+            );
       this.emitter.emit("error", context, error);
       throw error;
     }

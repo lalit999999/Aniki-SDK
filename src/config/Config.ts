@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { ConfigurationError } from "../core/errors.js";
+import { formatZodIssues, omitUndefined } from "../utils/index.js";
 
 /** LLM vendors the SDK knows how to talk to. */
 export type ProviderName = "openai" | "anthropic" | "gemini" | "ollama" | "groq" | "openrouter";
@@ -7,7 +8,7 @@ export type ProviderName = "openai" | "anthropic" | "gemini" | "ollama" | "groq"
 const PROVIDER_NAMES = ["openai", "anthropic", "gemini", "ollama", "groq", "openrouter"] as const;
 
 /** Environment variable each provider's API key is read from when not passed explicitly. */
-const PROVIDER_API_KEY_ENV_VAR: Readonly<Record<ProviderName, string>> = {
+export const PROVIDER_API_KEY_ENV_VAR: Readonly<Record<ProviderName, string>> = {
   openai: "OPENAI_API_KEY",
   anthropic: "ANTHROPIC_API_KEY",
   gemini: "GEMINI_API_KEY",
@@ -15,6 +16,14 @@ const PROVIDER_API_KEY_ENV_VAR: Readonly<Record<ProviderName, string>> = {
   groq: "GROQ_API_KEY",
   openrouter: "OPENROUTER_API_KEY",
 };
+
+/**
+ * Reads `provider`'s API key from its designated environment variable
+ * (see {@link PROVIDER_API_KEY_ENV_VAR}), or `undefined` if unset.
+ */
+export function resolveApiKeyFromEnv(provider: ProviderName): string | undefined {
+  return process.env[PROVIDER_API_KEY_ENV_VAR[provider]];
+}
 
 /** Options accepted by {@link AnikiSDK.configure}. */
 export interface AnikiConfigOptions {
@@ -40,13 +49,7 @@ const configSchema = z.object({
 function resolveApiKeyFallback(config: AnikiConfigOptions): string | undefined {
   const provider = config.provider ?? config.defaultProvider;
   if (!provider) return undefined;
-  return process.env[PROVIDER_API_KEY_ENV_VAR[provider]];
-}
-
-/** Drops keys whose value is `undefined`, satisfying `exactOptionalPropertyTypes`. */
-function omitUndefined<T extends object>(value: { [K in keyof T]?: T[K] | undefined }): T {
-  const entries = Object.entries(value).filter(([, v]) => v !== undefined);
-  return Object.fromEntries(entries) as T;
+  return resolveApiKeyFromEnv(provider);
 }
 
 /**
@@ -63,10 +66,9 @@ export class AnikiSDK {
   configure(options: AnikiConfigOptions): void {
     const result = configSchema.safeParse(options);
     if (!result.success) {
-      const details = result.error.issues
-        .map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`)
-        .join("; ");
-      throw new ConfigurationError(`Invalid Aniki configuration: ${details}`);
+      throw new ConfigurationError(
+        `Invalid Aniki configuration: ${formatZodIssues(result.error.issues)}`,
+      );
     }
 
     const merged = omitUndefined<AnikiConfigOptions>({ ...this.config, ...result.data });

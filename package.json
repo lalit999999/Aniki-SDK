@@ -13,12 +13,16 @@
       "require": "./dist/index.cjs"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "engines": {
     "node": ">=18"
   },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
     "build": "tsup",
     "dev": "tsup --watch",
     "lint": "eslint src",
@@ -31,12 +35,14 @@
   "license": "ISC",
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@vitest/coverage-v8": "^4.1.10",
     "eslint": "^10.8.0",
     "eslint-config-prettier": "^10.1.8",
     "prettier": "^3.9.6",
     "tsup": "^8.5.1",
     "typescript": "^6.0.3",
-    "typescript-eslint": "^8.65.0"
+    "typescript-eslint": "^8.65.0",
+    "vitest": "^4.1.10"
   },
   "dependencies": {
     "@types/node": "^26.1.2",

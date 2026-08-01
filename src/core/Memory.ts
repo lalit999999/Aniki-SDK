@@ -1,5 +1,6 @@
 import { isRole, type Message } from "../types/index.js";
 import { ValidationError } from "./errors.js";
+import { omitUndefined } from "../utils/index.js";
 
 /**
  * An ordered, append-only store of conversation {@link Message}s.
@@ -22,11 +23,30 @@ export class Memory {
     if (!isRole(message.role)) {
       throw new ValidationError(`Invalid message role: ${String(message.role)}`);
     }
-    if (typeof message.content !== "string" || message.content.length === 0) {
-      throw new ValidationError("Message content must be a non-empty string");
+    if (typeof message.content !== "string") {
+      throw new ValidationError("Message content must be a string");
     }
 
-    this.messages.push({ role: message.role, content: message.content });
+    const hasToolCalls = message.toolCalls !== undefined && message.toolCalls.length > 0;
+    if (message.content.length === 0 && !(message.role === "assistant" && hasToolCalls)) {
+      throw new ValidationError("Message content must be a non-empty string");
+    }
+    if (message.toolCalls !== undefined && message.role !== "assistant") {
+      throw new ValidationError('Only an "assistant" message may carry toolCalls');
+    }
+    if (message.role === "tool" && !message.toolCallId) {
+      throw new ValidationError('A "tool" message requires a toolCallId');
+    }
+
+    this.messages.push(
+      omitUndefined<Message>({
+        role: message.role,
+        content: message.content,
+        toolCalls: message.toolCalls,
+        toolCallId: message.toolCallId,
+        name: message.name,
+      }),
+    );
   }
 
   /** Returns a read-only snapshot of all stored messages, in insertion order. */

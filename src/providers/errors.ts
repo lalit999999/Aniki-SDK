@@ -39,8 +39,6 @@ export class ProviderResponseError extends ProviderError {
   readonly providerCode?: string;
   /** Whether retrying the same request could plausibly succeed. */
   readonly retryable: boolean;
-  /** The original error or response body this error was translated from. */
-  override readonly cause?: unknown;
 
   constructor(
     message: string,
@@ -48,13 +46,12 @@ export class ProviderResponseError extends ProviderError {
     retryable: boolean,
     details: ProviderErrorDetails = {},
   ) {
-    super(message);
+    super(message, details.cause);
     this.name = new.target.name;
     this.providerName = providerName;
     this.retryable = retryable;
     if (details.statusCode !== undefined) this.statusCode = details.statusCode;
     if (details.providerCode !== undefined) this.providerCode = details.providerCode;
-    if (details.cause !== undefined) this.cause = details.cause;
   }
 }
 

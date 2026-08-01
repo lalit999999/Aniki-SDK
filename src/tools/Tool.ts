@@ -86,7 +86,11 @@ export class Tool<TInput = unknown, TOutput = unknown> {
   private readonly _description: string;
   private readonly _inputSchema: z.ZodType<TInput>;
   private readonly _outputSchema: z.ZodType<TOutput> | undefined;
-  private readonly _execute: (input: TInput, context?: ToolContext) => Promise<TOutput> | TOutput;
+  // Stored with an erased `unknown` parameter (rather than `TInput`) so that
+  // heterogeneous `Tool<X, Y>` instances remain structurally assignable to
+  // the single `Tool` type `ToolRegistry` stores them as — `TInput` used
+  // contravariantly here would otherwise make every instantiation invariant.
+  private readonly _execute: (input: unknown, context?: ToolContext) => Promise<TOutput> | TOutput;
   private readonly _timeoutMs: number | undefined;
   private readonly _retries: number | undefined;
   private readonly _cache: boolean | undefined;
@@ -115,7 +119,10 @@ export class Tool<TInput = unknown, TOutput = unknown> {
     this._description = result.data.description;
     this._inputSchema = options.input;
     this._outputSchema = options.output;
-    this._execute = options.execute;
+    this._execute = options.execute as (
+      input: unknown,
+      context?: ToolContext,
+    ) => Promise<TOutput> | TOutput;
     this._timeoutMs = result.data.timeoutMs;
     this._retries = result.data.retries;
     this._cache = result.data.cache;
@@ -206,6 +213,21 @@ export class Tool<TInput = unknown, TOutput = unknown> {
   }
 
   /**
+   * Invokes the underlying `execute` function directly, with no input or
+   * output validation and no timeout/retry.
+   *
+   * Intended for {@link ToolExecutor}, which validates input beforehand (so
+   * it can attribute a validation failure without ever calling `execute`)
+   * and applies its own timeout/retry around this call. Prefer {@link run}
+   * outside of the executor.
+   */
+  invoke(input: TInput, context?: ToolContext): Promise<TOutput> {
+    return Promise.resolve(
+      context === undefined ? this._execute(input) : this._execute(input, context),
+    );
+  }
+
+  /**
    * Validates `input`, executes the tool, and validates its output — with no
    * timeout, retry, or registry involvement. This is the "unit-test a tool
    * without an LLM" path; {@link ToolExecutor} is what adds timeout/retry
@@ -213,7 +235,7 @@ export class Tool<TInput = unknown, TOutput = unknown> {
    */
   async run(input: TInput): Promise<TOutput> {
     const parsedInput = this.parseInput(input);
-    const rawOutput = await this._execute(parsedInput);
+    const rawOutput = await this.invoke(parsedInput);
     return this.parseOutput(rawOutput);
   }
 }

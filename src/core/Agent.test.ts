@@ -1,14 +1,19 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { Agent } from "./Agent.js";
-import { ValidationError } from "./errors.js";
+import { ConfigurationError, ValidationError } from "./errors.js";
 import { InMemorySession } from "./Session.js";
 import type { IProvider } from "../providers/AIProvider.js";
+import { OpenAIProvider } from "../providers/openai/OpenAIProvider.js";
 
 function createFakeProvider(): IProvider {
   return {
     name: "fake",
-    generate: async () => ({ content: "fake response" }),
+    capabilities: { streaming: false, toolCalling: false, structuredOutput: false },
+    generate: async () => ({ content: "fake response", model: "gpt-5.5" }),
+    generateStream: async function* () {
+      yield { delta: "fake response" };
+    },
   };
 }
 
@@ -107,5 +112,36 @@ describe("Agent", () => {
           provider: {} as IProvider,
         }),
     ).toThrow(ValidationError);
+  });
+
+  describe("string provider resolution", () => {
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    it("resolves a provider name string through ProviderFactory", () => {
+      vi.stubEnv("OPENAI_API_KEY", "sk-test-123");
+
+      const agent = new Agent({
+        name: "Assistant",
+        instructions: "Be helpful.",
+        model: "gpt-5.5",
+        provider: "openai",
+      });
+
+      expect(agent.provider).toBeInstanceOf(OpenAIProvider);
+    });
+
+    it("propagates ConfigurationError when the named provider has no resolvable API key", () => {
+      expect(
+        () =>
+          new Agent({
+            name: "Assistant",
+            instructions: "Be helpful.",
+            model: "gpt-5.5",
+            provider: "openai",
+          }),
+      ).toThrow(ConfigurationError);
+    });
   });
 });

@@ -2,7 +2,24 @@ import { describe, expect, it, vi } from "vitest";
 import { Agent } from "./Agent.js";
 import { ProviderError, ValidationError } from "./errors.js";
 import { Runner } from "./Runner.js";
-import type { IProvider, ProviderRequest, ProviderResponse } from "../providers/AIProvider.js";
+import { AuthenticationError } from "../providers/errors.js";
+import type {
+  IProvider,
+  ProviderCapabilities,
+  ProviderRequest,
+  ProviderResponse,
+  ProviderStreamChunk,
+} from "../providers/AIProvider.js";
+
+const FAKE_CAPABILITIES: ProviderCapabilities = {
+  streaming: false,
+  toolCalling: false,
+  structuredOutput: false,
+};
+
+async function* fakeGenerateStream(): AsyncIterable<ProviderStreamChunk> {
+  yield { delta: "" };
+}
 
 function createAgent(provider: IProvider): Agent {
   return new Agent({
@@ -17,7 +34,12 @@ describe("Runner", () => {
   it("executes a full run against a fake provider and returns a typed result", async () => {
     const provider: IProvider = {
       name: "fake",
-      generate: vi.fn(async (): Promise<ProviderResponse> => ({ content: "Hello, Lalit!" })),
+      capabilities: FAKE_CAPABILITIES,
+      generate: vi.fn(async (): Promise<ProviderResponse> => ({
+        content: "Hello, Lalit!",
+        model: "gpt-5.5",
+      })),
+      generateStream: fakeGenerateStream,
     };
     const agent = createAgent(provider);
     const runner = new Runner();
@@ -35,9 +57,12 @@ describe("Runner", () => {
   it("grows conversation history across sequential calls on the same session", async () => {
     const provider: IProvider = {
       name: "fake",
+      capabilities: FAKE_CAPABILITIES,
       generate: vi.fn(async (request: ProviderRequest): Promise<ProviderResponse> => ({
         content: `turn:${request.messages.length}`,
+        model: "gpt-5.5",
       })),
+      generateStream: fakeGenerateStream,
     };
     const agent = createAgent(provider);
     const runner = new Runner();
@@ -66,9 +91,11 @@ describe("Runner", () => {
   it("wraps a throwing provider's error as ProviderError instead of leaking it raw", async () => {
     const provider: IProvider = {
       name: "fake",
+      capabilities: FAKE_CAPABILITIES,
       generate: vi.fn(async () => {
         throw new Error("network exploded");
       }),
+      generateStream: fakeGenerateStream,
     };
     const agent = createAgent(provider);
     const runner = new Runner();
@@ -79,7 +106,12 @@ describe("Runner", () => {
   it("throws ValidationError for an empty message without calling the provider", async () => {
     const provider: IProvider = {
       name: "fake",
-      generate: vi.fn(async (): Promise<ProviderResponse> => ({ content: "unused" })),
+      capabilities: FAKE_CAPABILITIES,
+      generate: vi.fn(async (): Promise<ProviderResponse> => ({
+        content: "unused",
+        model: "gpt-5.5",
+      })),
+      generateStream: fakeGenerateStream,
     };
     const agent = createAgent(provider);
     const runner = new Runner();
@@ -91,7 +123,9 @@ describe("Runner", () => {
   it("emits lifecycle events in the expected order on the happy path", async () => {
     const provider: IProvider = {
       name: "fake",
-      generate: vi.fn(async (): Promise<ProviderResponse> => ({ content: "hi" })),
+      capabilities: FAKE_CAPABILITIES,
+      generate: vi.fn(async (): Promise<ProviderResponse> => ({ content: "hi", model: "gpt-5.5" })),
+      generateStream: fakeGenerateStream,
     };
     const agent = createAgent(provider);
     const runner = new Runner();
@@ -110,9 +144,11 @@ describe("Runner", () => {
   it("emits an error event before throwing when the provider fails", async () => {
     const provider: IProvider = {
       name: "fake",
+      capabilities: FAKE_CAPABILITIES,
       generate: vi.fn(async () => {
         throw new Error("boom");
       }),
+      generateStream: fakeGenerateStream,
     };
     const agent = createAgent(provider);
     const runner = new Runner();
@@ -125,5 +161,45 @@ describe("Runner", () => {
 
     await expect(runner.run(agent, { message: "Hi" })).rejects.toThrow(ProviderError);
     expect(seen).toEqual(["agent:started", "llm:request", "error"]);
+  });
+
+  it("rethrows a ProviderError subclass thrown by the provider unchanged, preserving its fields", async () => {
+    const subclassError = new AuthenticationError("invalid api key", "openai", {
+      statusCode: 401,
+    });
+    const provider: IProvider = {
+      name: "fake",
+      capabilities: FAKE_CAPABILITIES,
+      generate: vi.fn(async () => {
+        throw subclassError;
+      }),
+      generateStream: fakeGenerateStream,
+    };
+    const agent = createAgent(provider);
+    const runner = new Runner();
+    const seenErrors: Error[] = [];
+    runner.on("error", (_context, error) => seenErrors.push(error));
+
+    await expect(runner.run(agent, { message: "Hi" })).rejects.toBe(subclassError);
+    expect(seenErrors).toEqual([subclassError]);
+    expect((seenErrors[0] as AuthenticationError).statusCode).toBe(401);
+  });
+
+  it("wraps a plain, non-ProviderError throw into a fresh ProviderError as before", async () => {
+    const provider: IProvider = {
+      name: "fake",
+      capabilities: FAKE_CAPABILITIES,
+      generate: vi.fn(async () => {
+        throw new Error("plain failure");
+      }),
+      generateStream: fakeGenerateStream,
+    };
+    const agent = createAgent(provider);
+    const runner = new Runner();
+
+    await expect(runner.run(agent, { message: "Hi" })).rejects.toThrow(ProviderError);
+    await expect(runner.run(agent, { message: "Hi" })).rejects.not.toBeInstanceOf(
+      AuthenticationError,
+    );
   });
 });

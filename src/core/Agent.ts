@@ -1,8 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { z, type ZodTypeAny } from "zod";
+import type { ProviderName } from "../config/Config.js";
 import type { IProvider } from "../providers/AIProvider.js";
+import { ProviderFactory } from "../providers/ProviderFactory.js";
 import { ValidationError } from "./errors.js";
 import { InMemorySession, type ISession } from "./Session.js";
+import { formatZodIssues } from "../utils/index.js";
 
 const agentSchema = z.object({
   name: z.string().min(1),
@@ -18,8 +21,12 @@ export interface AgentOptions {
   readonly instructions: string;
   /** The model identifier to send requests to (e.g. `"gpt-5.5"`). */
   readonly model: string;
-  /** The LLM provider this agent's requests are executed against. */
-  readonly provider: IProvider;
+  /**
+   * The LLM provider this agent's requests are executed against, either as
+   * a constructed {@link IProvider} instance or the name of a registered
+   * provider (e.g. `"openai"`) to resolve via {@link ProviderFactory}.
+   */
+  readonly provider: IProvider | ProviderName;
   /** The conversation session this agent reads and writes history to. Defaults to a fresh in-memory session. */
   readonly session?: ISession;
   /** The Zod schema the final response must validate against, if structured output is required. */
@@ -61,19 +68,22 @@ export class Agent {
   constructor(options: AgentOptions) {
     const result = agentSchema.safeParse(options);
     if (!result.success) {
-      const details = result.error.issues
-        .map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`)
-        .join("; ");
-      throw new ValidationError(`Invalid Agent configuration: ${details}`);
+      throw new ValidationError(
+        `Invalid Agent configuration: ${formatZodIssues(result.error.issues)}`,
+      );
     }
-    if (!options.provider || typeof options.provider.generate !== "function") {
+    const provider =
+      typeof options.provider === "string"
+        ? ProviderFactory.create(options.provider)
+        : options.provider;
+    if (!provider || typeof provider.generate !== "function") {
       throw new ValidationError("Invalid Agent configuration: provider must implement IProvider");
     }
 
     this._name = result.data.name;
     this._instructions = result.data.instructions;
     this._model = result.data.model;
-    this._provider = options.provider;
+    this._provider = provider;
     this._session = options.session ?? new InMemorySession(randomUUID());
     this._output = options.output;
     this._tools = options.tools ?? [];

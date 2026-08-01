@@ -33,6 +33,7 @@
     // "noPropertyAccessFromIndexSignature": true,
 
     // Recommended Options
+    "ignoreDeprecations": "6.0",
     "strict": true,
     "verbatimModuleSyntax": true,
     "isolatedModules": true,

@@ -61,7 +61,9 @@ describe("AnikiSDK", () => {
   it("throws ConfigurationError on invalid input instead of a raw error", () => {
     expect(() => sdk.configure({ timeout: -1 })).toThrow(ConfigurationError);
     expect(() => sdk.configure({ retryCount: -5 })).toThrow(ConfigurationError);
-    expect(() => sdk.configure({ provider: "not-a-provider" as never })).toThrow(ConfigurationError);
+    expect(() => sdk.configure({ provider: "not-a-provider" as never })).toThrow(
+      ConfigurationError,
+    );
   });
 
   it("leaves prior configuration untouched when a later configure() call is invalid", () => {

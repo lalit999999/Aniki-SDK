@@ -1,0 +1,24 @@
+{
+  "name": "agent-sdk",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "dotenv": "^17.4.2",
+    "openai": "^7.1.0",
+    "typescript": "^7.0.2"
+  },
+  "dependencies": {
+    "@openai/agents": "^0.14.1",
+    "@types/node": "^26.1.2",
+    "typescript": "^7.0.2",
+    "zod": "^4.4.3"
+  }
+}

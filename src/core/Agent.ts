@@ -3,14 +3,19 @@ import { z, type ZodTypeAny } from "zod";
 import type { ProviderName } from "../config/Config.js";
 import type { IProvider } from "../providers/AIProvider.js";
 import { ProviderFactory } from "../providers/ProviderFactory.js";
+import type { Tool } from "../tools/Tool.js";
+import { ToolRegistry } from "../tools/ToolRegistry.js";
 import { ValidationError } from "./errors.js";
 import { InMemorySession, type ISession } from "./Session.js";
 import { formatZodIssues } from "../utils/index.js";
+
+const DEFAULT_MAX_TOOL_ITERATIONS = 5;
 
 const agentSchema = z.object({
   name: z.string().min(1),
   instructions: z.string().min(1),
   model: z.string().min(1),
+  maxToolIterations: z.number().int().positive().optional(),
 });
 
 /** Options accepted by the {@link Agent} constructor. */
@@ -31,8 +36,10 @@ export interface AgentOptions {
   readonly session?: ISession;
   /** The Zod schema the final response must validate against, if structured output is required. */
   readonly output?: ZodTypeAny;
-  // Real Tool type lands in a later task; empty arrays are the expected default until then.
-  readonly tools?: readonly unknown[];
+  /** The tools this agent may call. Must have unique names — enforced at construction via {@link ToolRegistry}. */
+  readonly tools?: readonly Tool[];
+  /** The maximum number of tool-calling iterations {@link Runner} runs before throwing {@link MaxToolIterationsError}. Defaults to `5`. */
+  readonly maxToolIterations?: number;
   // Real Middleware type lands in a later task; empty arrays are the expected default until then.
   readonly middleware?: readonly unknown[];
 }
@@ -61,7 +68,9 @@ export class Agent {
   private readonly _provider: IProvider;
   private readonly _session: ISession;
   private readonly _output: ZodTypeAny | undefined;
-  private readonly _tools: readonly unknown[];
+  private readonly _tools: readonly Tool[];
+  private readonly _toolRegistry: ToolRegistry;
+  private readonly _maxToolIterations: number;
   private readonly _middleware: readonly unknown[];
 
   /** Constructs an Agent. Throws {@link ValidationError} if the configuration is invalid. */
@@ -87,6 +96,8 @@ export class Agent {
     this._session = options.session ?? new InMemorySession(randomUUID());
     this._output = options.output;
     this._tools = options.tools ?? [];
+    this._toolRegistry = new ToolRegistry(this._tools);
+    this._maxToolIterations = result.data.maxToolIterations ?? DEFAULT_MAX_TOOL_ITERATIONS;
     this._middleware = options.middleware ?? [];
   }
 
@@ -120,9 +131,19 @@ export class Agent {
     return this._output;
   }
 
-  /** This agent's configured tools. Empty until the Tools task lands. */
-  get tools(): readonly unknown[] {
+  /** This agent's configured tools. */
+  get tools(): readonly Tool[] {
     return this._tools;
+  }
+
+  /** The registry {@link Runner} resolves this agent's tool calls against. Built at construction time, so a duplicate tool name fails fast here rather than mid-run. */
+  get toolRegistry(): ToolRegistry {
+    return this._toolRegistry;
+  }
+
+  /** The maximum number of tool-calling iterations {@link Runner} runs before throwing {@link MaxToolIterationsError}. */
+  get maxToolIterations(): number {
+    return this._maxToolIterations;
   }
 
   /** This agent's configured middleware. Empty until the Middleware task lands. */

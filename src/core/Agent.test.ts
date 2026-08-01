@@ -1,10 +1,20 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { Agent } from "./Agent.js";
-import { ConfigurationError, ValidationError } from "./errors.js";
+import { DuplicateToolError, ConfigurationError, ValidationError } from "./errors.js";
 import { InMemorySession } from "./Session.js";
 import type { IProvider } from "../providers/AIProvider.js";
 import { OpenAIProvider } from "../providers/openai/OpenAIProvider.js";
+import { Tool } from "../tools/Tool.js";
+
+function makeTool(name: string): Tool {
+  return new Tool({
+    name,
+    description: `Tool named ${name}.`,
+    input: z.object({}),
+    execute: () => ({}),
+  });
+}
 
 function createFakeProvider(): IProvider {
   return {
@@ -63,19 +73,89 @@ describe("Agent", () => {
 
   it("stores an optional output schema and tools/middleware arrays", () => {
     const output = z.object({ answer: z.string() });
+    const weatherTool = makeTool("get_weather");
     const agent = new Agent({
       name: "Assistant",
       instructions: "Be helpful.",
       model: "gpt-5.5",
       provider: createFakeProvider(),
       output,
-      tools: [{}],
+      tools: [weatherTool],
       middleware: [{}],
     });
 
     expect(agent.output).toBe(output);
-    expect(agent.tools).toHaveLength(1);
+    expect(agent.tools).toEqual([weatherTool]);
     expect(agent.middleware).toHaveLength(1);
+  });
+
+  describe("tools", () => {
+    it("defaults to an empty tools array and a max of 5 tool iterations", () => {
+      const agent = new Agent({
+        name: "Assistant",
+        instructions: "Be helpful.",
+        model: "gpt-5.5",
+        provider: createFakeProvider(),
+      });
+
+      expect(agent.tools).toEqual([]);
+      expect(agent.toolRegistry.size).toBe(0);
+      expect(agent.maxToolIterations).toBe(5);
+    });
+
+    it("builds a toolRegistry containing every configured tool", () => {
+      const weatherTool = makeTool("get_weather");
+      const searchTool = makeTool("search");
+      const agent = new Agent({
+        name: "Assistant",
+        instructions: "Be helpful.",
+        model: "gpt-5.5",
+        provider: createFakeProvider(),
+        tools: [weatherTool, searchTool],
+      });
+
+      expect(agent.toolRegistry.size).toBe(2);
+      expect(agent.toolRegistry.get("get_weather")).toBe(weatherTool);
+      expect(agent.toolRegistry.get("search")).toBe(searchTool);
+    });
+
+    it("throws DuplicateToolError at construction when two tools share a name", () => {
+      expect(
+        () =>
+          new Agent({
+            name: "Assistant",
+            instructions: "Be helpful.",
+            model: "gpt-5.5",
+            provider: createFakeProvider(),
+            tools: [makeTool("get_weather"), makeTool("get_weather")],
+          }),
+      ).toThrow(DuplicateToolError);
+    });
+
+    it("accepts a custom maxToolIterations", () => {
+      const agent = new Agent({
+        name: "Assistant",
+        instructions: "Be helpful.",
+        model: "gpt-5.5",
+        provider: createFakeProvider(),
+        maxToolIterations: 10,
+      });
+
+      expect(agent.maxToolIterations).toBe(10);
+    });
+
+    it("throws ValidationError for a non-positive maxToolIterations", () => {
+      expect(
+        () =>
+          new Agent({
+            name: "Assistant",
+            instructions: "Be helpful.",
+            model: "gpt-5.5",
+            provider: createFakeProvider(),
+            maxToolIterations: 0,
+          }),
+      ).toThrow(ValidationError);
+    });
   });
 
   it("throws ValidationError with a clear message when name is missing", () => {

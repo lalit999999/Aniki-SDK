@@ -47,6 +47,9 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
 
+    "smoke": "npm run build && node --env-file-if-exists=.env index.js",
+    "smoke:offline": "node index.js",
+
     "lint": "eslint src",
     "lint:fix": "eslint src --fix",
 

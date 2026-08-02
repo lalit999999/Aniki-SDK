@@ -36,7 +36,7 @@ describe("MockProvider defaults", () => {
 
     expect(response.content).toBe("Mock response");
     expect(response.model).toBe("mock-model");
-    expect(response.finishReason).toBe("stop");
+    expect(response.finishReason).toBeUndefined();
   });
 
   it("never crashes across repeated calls with an exhausted queue", async () => {

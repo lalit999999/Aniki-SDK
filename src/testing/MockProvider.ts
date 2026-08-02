@@ -21,8 +21,10 @@ const DEFAULT_CAPABILITIES: ProviderCapabilities = {
 const DEFAULT_RESPONSE: ProviderResponse = {
   content: "Mock response",
   model: "mock-model",
-  finishReason: "stop",
 };
+
+/** The `finishReason` a scripted stream's final chunk carries when {@link MockProvider.enqueueStream} was not given one. */
+const DEFAULT_STREAM_FINISH_REASON: FinishReason = "stop";
 
 /** Options accepted by the {@link MockProvider} constructor. */
 export interface MockProviderOptions {
@@ -195,20 +197,32 @@ export class MockProvider implements IProvider {
     return entry.response;
   }
 
-  /** Yields the next queued stream script (or a single default chunk). Records `request`. */
-  async *generateStream(request: ProviderRequest): AsyncIterable<ProviderStreamChunk> {
+  /**
+   * Yields the next queued stream script (or a single default chunk).
+   *
+   * Records `request` synchronously, at call time — not lazily on first
+   * iteration — so a caller that inspects {@link calls} immediately after
+   * calling this (without yet awaiting/draining the returned iterable, the
+   * way a real async generator would behave) still observes the call.
+   */
+  generateStream(request: ProviderRequest): AsyncIterable<ProviderStreamChunk> {
     this.recordedCalls.push(request);
-    if (this.latencyMs > 0) {
-      await sleep(this.latencyMs);
-    }
     const entry = this.streamQueue.shift() ?? {
       deltas: [DEFAULT_RESPONSE.content],
-      finishReason: "stop" as FinishReason,
+      finishReason: DEFAULT_STREAM_FINISH_REASON,
     };
     const deltas = entry.deltas.length > 0 ? entry.deltas : [""];
-    const lastIndex = deltas.length - 1;
-    for (const [index, delta] of deltas.entries()) {
-      yield index === lastIndex ? { delta, finishReason: entry.finishReason } : { delta };
-    }
+    const latencyMs = this.latencyMs;
+
+    const run = async function* (this: void): AsyncGenerator<ProviderStreamChunk> {
+      if (latencyMs > 0) {
+        await sleep(latencyMs);
+      }
+      const lastIndex = deltas.length - 1;
+      for (const [index, delta] of deltas.entries()) {
+        yield index === lastIndex ? { delta, finishReason: entry.finishReason } : { delta };
+      }
+    };
+    return run();
   }
 }

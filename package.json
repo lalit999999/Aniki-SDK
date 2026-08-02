@@ -11,11 +11,17 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "require": "./dist/index.cjs"
+    },
+    "./testing": {
+      "types": "./dist/testing/index.d.ts",
+      "import": "./dist/testing/index.js",
+      "require": "./dist/testing/index.cjs"
     }
   },
   "files": [
     "dist"
   ],
+  "sideEffects": false,
   "engines": {
     "node": ">=18"
   },
@@ -32,7 +38,19 @@
     "typecheck": "tsc --noEmit",
     "verify": "npm run typecheck && npm run lint && npm test"
   },
-  "keywords": [],
+  "keywords": [
+    "ai",
+    "agent",
+    "llm",
+    "sdk",
+    "typescript",
+    "openai",
+    "tools"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lalit999999/Own-Agent-sdk.git"
+  },
   "author": "",
   "license": "ISC",
   "devDependencies": {

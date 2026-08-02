@@ -55,6 +55,20 @@ describe("StructuredOutputParser", () => {
         expect(outcome.error).toBeInstanceOf(OutputParseError);
       }
     });
+
+    it("rethrows a non-OutputError thrown by a dependency instead of swallowing it", () => {
+      const extractor = new JsonExtractor();
+      // Cast: only `validate` is exercised by safeParse(), so a minimal stand-in
+      // is enough to prove a non-OutputError throw propagates unwrapped.
+      const validator = {
+        validate: vi.fn(() => {
+          throw new Error("unexpected");
+        }),
+      } as unknown as OutputValidator<z.infer<typeof userSchema>>;
+      const parser = new StructuredOutputParser(userSchema, { extractor, validator });
+
+      expect(() => parser.safeParse('{"name":"Lalit","age":30}')).toThrow("unexpected");
+    });
   });
 
   it("toJSONSchema delegates to z.toJSONSchema", () => {

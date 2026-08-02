@@ -127,4 +127,28 @@ describe("FetchHttpClient", () => {
       client.request({ method: "GET", url: "https://api.openai.com/v1/chat/completions" }),
     ).rejects.toThrow(ProviderConnectionError);
   });
+
+  it("stringifies a non-Error rejection from fetch in the ProviderConnectionError message", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw "raw string rejection";
+      }),
+    );
+
+    const client = new FetchHttpClient({ providerName: "openai" });
+
+    await expect(
+      client.request({ method: "GET", url: "https://api.openai.com/v1/chat/completions" }),
+    ).rejects.toThrow("raw string rejection");
+  });
+
+  it("yields nothing when streaming a response with a null body", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse('{"ok":true}')));
+
+    const client = new FetchHttpClient();
+    const response = await client.requestStream({ method: "GET", url: "https://example.com" });
+
+    expect(await collect(response.body)).toBe("");
+  });
 });

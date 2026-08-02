@@ -80,6 +80,17 @@ describe("OpenAIErrorTranslator", () => {
     );
   });
 
+  it("translates an unmapped status into a non-retryable base ProviderResponseError", () => {
+    try {
+      new OpenAIErrorTranslator().translate(418, errorBody("I'm a teapot"), {});
+      expect.fail("expected translate to throw");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ProviderResponseError);
+      expect((error as ProviderResponseError).retryable).toBe(false);
+      expect((error as ProviderResponseError).statusCode).toBe(418);
+    }
+  });
+
   it("carries the provider name and original body as cause", () => {
     try {
       new OpenAIErrorTranslator().translate(401, errorBody("invalid api key", "invalid_key"), {});

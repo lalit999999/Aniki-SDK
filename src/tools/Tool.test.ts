@@ -34,6 +34,8 @@ describe("Tool", () => {
 
     expect(tool.name).toBe("get_weather");
     expect(tool.description).toBe("Get the current weather for a city.");
+    expect(tool.inputSchema).toBeInstanceOf(z.ZodType);
+    expect(tool.outputSchema).toBeInstanceOf(z.ZodType);
     expect(tool.timeoutMs).toBe(3000);
     expect(tool.retries).toBe(2);
     expect(tool.cache).toBe(true);

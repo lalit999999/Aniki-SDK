@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { ProviderRequest, ProviderResponse } from "../providers/AIProvider.js";
 import type { Message, ToolCall, ToolResult } from "../types/index.js";
 import type { RunMetadata } from "../types/output.js";
@@ -7,7 +8,13 @@ import { ToolExecutor } from "../tools/ToolExecutor.js";
 import type { Agent } from "./Agent.js";
 import { Context } from "./Context.js";
 import { EventEmitter, type EventMap } from "./EventEmitter.js";
-import { MaxToolIterationsError, ProviderError, ValidationError } from "./errors.js";
+import {
+  MaxToolIterationsError,
+  ProviderError,
+  StreamingNotSupportedError,
+  ValidationError,
+} from "./errors.js";
+import { RunStream } from "./RunStream.js";
 
 /** Input accepted by {@link Runner.run}. */
 export interface RunInput {
@@ -268,5 +275,62 @@ export class Runner {
     this.emitter.emit("agent:finished", context, result);
 
     return result;
+  }
+
+  /**
+   * Opens a streamed turn for `agent` given `input`, returning a
+   * {@link RunStream} the caller drains at its own pace.
+   *
+   * Unlike {@link run}, this method does not itself await completion — it
+   * validates preconditions, persists the user message, opens the
+   * provider's stream, and hands back a one-shot handle. Throws
+   * {@link ValidationError} for malformed input and
+   * {@link StreamingNotSupportedError} synchronously, before any request is
+   * sent, when `agent.provider.capabilities.streaming` is `false` or the
+   * agent has any registered tools — this SDK's `ProviderStreamChunk`
+   * contract has no way to express a tool call, so streaming with tools is
+   * out of scope until a later task.
+   *
+   * When `agent.output` is set, the same format instructions {@link run}
+   * appends are appended here too; the accumulated stream content is
+   * validated against that schema once, when the stream completes, and the
+   * typed result is available via `RunStream.result`.
+   */
+  stream<TOutput = undefined>(agent: Agent<TOutput>, input: RunInput): RunStream<TOutput> {
+    if (typeof input.message !== "string" || input.message.length === 0) {
+      throw new ValidationError("Runner input requires a non-empty message");
+    }
+    if (!agent.provider.capabilities.streaming) {
+      throw new StreamingNotSupportedError(agent.provider.name, "capabilities.streaming is false");
+    }
+    if (agent.toolRegistry.list().length > 0) {
+      throw new StreamingNotSupportedError(
+        agent.provider.name,
+        "streaming does not support tool calls",
+      );
+    }
+
+    const session = agent.session;
+    const outputParser = agent.output ? new StructuredOutputParser(agent.output) : undefined;
+    const systemContent = outputParser
+      ? `${agent.instructions}\n\n${outputParser.toFormatInstructions()}`
+      : agent.instructions;
+
+    session.addMessage({ role: "user", content: input.message });
+
+    const request: ProviderRequest = {
+      model: agent.model,
+      messages: [{ role: "system", content: systemContent }, ...session.getMessages()],
+    };
+
+    return new RunStream<TOutput>({
+      runId: randomUUID(),
+      model: agent.model,
+      provider: agent.provider.name,
+      session,
+      source: agent.provider.generateStream(request),
+      startedAt: Date.now(),
+      ...(outputParser ? { outputParser } : {}),
+    });
   }
 }

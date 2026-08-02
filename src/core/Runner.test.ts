@@ -6,6 +6,8 @@ import {
   OutputParseError,
   OutputValidationError,
   ProviderError,
+  StreamAbortedError,
+  StreamingNotSupportedError,
   ValidationError,
 } from "./errors.js";
 import { Runner } from "./Runner.js";
@@ -707,6 +709,126 @@ describe("Runner", () => {
         iterations: 1,
         streamed: false,
       });
+    });
+  });
+
+  describe("stream", () => {
+    const STREAMING_CAPABILITIES: ProviderCapabilities = {
+      streaming: true,
+      toolCalling: true,
+      structuredOutput: false,
+    };
+
+    function createStreamingProvider(chunks: readonly ProviderStreamChunk[]): IProvider {
+      return {
+        name: "fake",
+        capabilities: STREAMING_CAPABILITIES,
+        generate: vi.fn(async (): Promise<ProviderResponse> => ({
+          content: "unused",
+          model: "gpt-5.5",
+        })),
+        generateStream: vi.fn(async function* (): AsyncIterable<ProviderStreamChunk> {
+          for (const chunk of chunks) {
+            yield chunk;
+          }
+        }),
+      };
+    }
+
+    function createNeverStreamingProvider(): IProvider {
+      return {
+        name: "fake",
+        capabilities: STREAMING_CAPABILITIES,
+        generate: vi.fn(async (): Promise<ProviderResponse> => ({
+          content: "unused",
+          model: "gpt-5.5",
+        })),
+        generateStream: () => ({
+          [Symbol.asyncIterator]() {
+            return { next: () => new Promise<IteratorResult<ProviderStreamChunk>>(() => {}) };
+          },
+        }),
+      };
+    }
+
+    it("throws ValidationError for an empty message without opening a stream", () => {
+      const provider = createStreamingProvider([{ delta: "hi" }]);
+      const agent = createAgent(provider);
+      const runner = new Runner();
+
+      expect(() => runner.stream(agent, { message: "" })).toThrow(ValidationError);
+      expect(provider.generateStream).not.toHaveBeenCalled();
+    });
+
+    it("throws StreamingNotSupportedError when the provider does not support streaming", () => {
+      const provider: IProvider = {
+        ...createStreamingProvider([]),
+        capabilities: FAKE_CAPABILITIES,
+      };
+      const agent = createAgent(provider);
+      const runner = new Runner();
+
+      expect(() => runner.stream(agent, { message: "Hi" })).toThrow(StreamingNotSupportedError);
+    });
+
+    it("throws StreamingNotSupportedError when the agent has registered tools", () => {
+      const provider = createStreamingProvider([{ delta: "hi" }]);
+      const tool = makeWeatherTool(async () => ({ tempC: 1 }));
+      const agent = createAgentWithTools(provider, [tool]);
+      const runner = new Runner();
+
+      expect(() => runner.stream(agent, { message: "Hi" })).toThrow(StreamingNotSupportedError);
+    });
+
+    it("persists the user message before opening the stream", () => {
+      const provider = createStreamingProvider([{ delta: "hi" }]);
+      const agent = createAgent(provider);
+      const runner = new Runner();
+
+      runner.stream(agent, { message: "Hi" });
+
+      expect(agent.session.getMessages()).toEqual([{ role: "user", content: "Hi" }]);
+    });
+
+    it("appends format instructions to the system message when the agent has an output schema", () => {
+      const provider = createStreamingProvider([{ delta: '{"name":"Lalit"}' }]);
+      const schema = z.object({ name: z.string() });
+      const agent = createAgentWithOutput(provider, schema);
+      const runner = new Runner();
+
+      runner.stream(agent, { message: "Extract the user" });
+
+      const request = (provider.generateStream as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as
+        ProviderRequest | undefined;
+      expect(request?.messages[0]).toEqual(expect.objectContaining({ role: "system" }));
+      expect(request?.messages[0]?.content).toContain(agent.instructions);
+      expect(request?.messages[0]?.content).toContain("JSON");
+    });
+
+    it("resolves result with the streamed content and typed output", async () => {
+      const provider = createStreamingProvider([{ delta: "Hello" }, { delta: "!" }]);
+      const agent = createAgent(provider);
+      const runner = new Runner();
+
+      const stream = runner.stream(agent, { message: "Hi" });
+      const result = await stream.result;
+
+      expect(result.content).toBe("Hello!");
+      expect(result.metadata.streamed).toBe(true);
+      expect(result.metadata.provider).toBe("fake");
+    });
+
+    it("aborting the returned stream surfaces StreamAbortedError through result", async () => {
+      const provider = createNeverStreamingProvider();
+      const agent = createAgent(provider);
+      const runner = new Runner();
+
+      const stream = runner.stream(agent, { message: "Hi" });
+      const rejection = expect(stream.result).rejects.toThrow(StreamAbortedError);
+
+      stream.abort("cancelled");
+
+      await rejection;
     });
   });
 });

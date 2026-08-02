@@ -1,3 +1,8 @@
+import type { ToolCall } from "./tool.js";
+
+export type { ToolCall, ToolDefinition, ToolResult } from "./tool.js";
+export type { RunMetadata, StreamEvent, StructuredParseOutcome } from "./output.js";
+
 /** The speaker a conversation message is attributed to. */
 export type Role = "system" | "user" | "assistant" | "tool";
 
@@ -12,6 +17,12 @@ export function isRole(value: unknown): value is Role {
 export interface Message {
   /** Who this message is attributed to. */
   readonly role: Role;
-  /** The textual content of the message. */
+  /** The textual content of the message. Empty only when `role` is `"assistant"` and `toolCalls` is non-empty. */
   readonly content: string;
+  /** The tool calls this assistant turn requested. Only ever set when `role` is `"assistant"`. */
+  readonly toolCalls?: readonly ToolCall[];
+  /** The id of the {@link ToolCall} this message answers. Required when `role` is `"tool"`. */
+  readonly toolCallId?: string;
+  /** The name of the tool this message answers. Set alongside `toolCallId`. */
+  readonly name?: string;
 }

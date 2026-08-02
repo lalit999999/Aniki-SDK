@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { Message } from "../types/index.js";
+import type { Message, ToolCall, ToolDefinition } from "../types/index.js";
 
 /**
  * The normalized provider contract and its supporting types.
@@ -45,6 +45,8 @@ export interface ProviderRequest {
   readonly model: string;
   /** Optional generation parameters (temperature, max tokens, etc.). */
   readonly params?: GenerationParams;
+  /** The tools available to the model for this request, translated by the provider into its own wire format. Omitted entirely when the agent has none. */
+  readonly tools?: readonly ToolDefinition[];
 }
 
 /**
@@ -81,6 +83,8 @@ export interface ProviderResponse {
   readonly finishReason?: FinishReason;
   /** Token accounting for this request/response cycle, when available. */
   readonly usage?: TokenUsage;
+  /** The tool calls the model requested instead of (or alongside) `content`, when it chose to use a tool. */
+  readonly toolCalls?: readonly ToolCall[];
 }
 
 /** A single incremental chunk of a streamed completion. */

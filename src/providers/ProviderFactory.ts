@@ -8,7 +8,7 @@ import type { ProviderConfig } from "../config/ProviderConfig.js";
 import { ConfigurationError } from "../core/errors.js";
 import { omitUndefined } from "../utils/index.js";
 import type { IProvider } from "./AIProvider.js";
-import { OpenAIProvider } from "./openai/OpenAIProvider.js";
+import { OPENROUTER_DEFAULT_BASE_URL, OpenAIProvider } from "./openai/OpenAIProvider.js";
 import { defaultProviderRegistry, ProviderRegistry } from "./ProviderRegistry.js";
 
 function isKnownProviderName(name: string): name is ProviderName {
@@ -27,6 +27,16 @@ function isKnownProviderName(name: string): name is ProviderName {
 export function registerBuiltInProviders(registry: ProviderRegistry): void {
   if (!registry.has("openai")) {
     registry.register("openai", (config) => new OpenAIProvider(config));
+  }
+  if (!registry.has("openrouter")) {
+    registry.register(
+      "openrouter",
+      (config) =>
+        new OpenAIProvider(config, {
+          name: "openrouter",
+          defaultBaseURL: OPENROUTER_DEFAULT_BASE_URL,
+        }),
+    );
   }
 }
 

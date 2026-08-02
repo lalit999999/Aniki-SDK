@@ -7,7 +7,7 @@ import type {
   IHttpClient,
 } from "../http/HttpClient.js";
 import { ProviderTimeoutError } from "../errors.js";
-import { DEFAULT_BASE_URL, OpenAIProvider } from "./OpenAIProvider.js";
+import { DEFAULT_BASE_URL, OPENROUTER_DEFAULT_BASE_URL, OpenAIProvider } from "./OpenAIProvider.js";
 
 function jsonBody(overrides: Partial<Record<string, unknown>> = {}): string {
   return JSON.stringify({
@@ -141,6 +141,38 @@ describe("OpenAIProvider", () => {
       expect(httpClient.lastRequest?.url).toBe("https://custom.example.com/v1/chat/completions");
     },
   );
+
+  it("reports 'openai' and DEFAULT_BASE_URL when constructed with no name/defaultBaseURL deps", async () => {
+    const httpClient = new StubHttpClient({ status: 200, headers: {}, body: jsonBody() });
+    const provider = new OpenAIProvider({ apiKey: "sk-test" }, { httpClient });
+
+    expect(provider.name).toBe("openai");
+    await provider.generate({ model: "gpt-5.5", messages: [{ role: "user", content: "Hi" }] });
+    expect(httpClient.lastRequest?.url).toBe(`${DEFAULT_BASE_URL}/chat/completions`);
+  });
+
+  it("reports a custom name and uses defaultBaseURL when neither is overridden by config", async () => {
+    const httpClient = new StubHttpClient({ status: 200, headers: {}, body: jsonBody() });
+    const provider = new OpenAIProvider(
+      { apiKey: "sk-or-test" },
+      { httpClient, name: "openrouter", defaultBaseURL: OPENROUTER_DEFAULT_BASE_URL },
+    );
+
+    expect(provider.name).toBe("openrouter");
+    await provider.generate({ model: "gpt-5.5", messages: [{ role: "user", content: "Hi" }] });
+    expect(httpClient.lastRequest?.url).toBe(`${OPENROUTER_DEFAULT_BASE_URL}/chat/completions`);
+  });
+
+  it("lets an explicit config.baseURL win over defaultBaseURL", async () => {
+    const httpClient = new StubHttpClient({ status: 200, headers: {}, body: jsonBody() });
+    const provider = new OpenAIProvider(
+      { apiKey: "sk-or-test", baseURL: "https://custom.example.com/v1" },
+      { httpClient, name: "openrouter", defaultBaseURL: OPENROUTER_DEFAULT_BASE_URL },
+    );
+
+    await provider.generate({ model: "gpt-5.5", messages: [{ role: "user", content: "Hi" }] });
+    expect(httpClient.lastRequest?.url).toBe("https://custom.example.com/v1/chat/completions");
+  });
 
   it.each([
     [401, "AuthenticationError"],

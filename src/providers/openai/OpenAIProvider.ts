@@ -18,6 +18,9 @@ import { OpenAIResponseParser } from "./OpenAIResponseParser.js";
 /** The default OpenAI API base URL, used when {@link ProviderConfig.baseURL} is omitted. */
 export const DEFAULT_BASE_URL = "https://api.openai.com/v1";
 
+/** OpenRouter's OpenAI-wire-compatible base URL, used as {@link OpenAIProvider}'s default when constructed for the `"openrouter"` provider (see {@link registerBuiltInProviders}). */
+export const OPENROUTER_DEFAULT_BASE_URL = "https://openrouter.ai/api/v1";
+
 const DEFAULT_TIMEOUT_MS = 30000;
 const CHAT_COMPLETIONS_PATH = "/chat/completions";
 
@@ -33,6 +36,20 @@ export interface OpenAIProviderDependencies {
   readonly httpClient?: IHttpClient;
   /** The auth strategy to attach credentials with. Defaults to a {@link BearerAuthStrategy}. */
   readonly authStrategy?: IAuthStrategy;
+  /**
+   * The name this provider instance reports via {@link IProvider.name}.
+   * Defaults to `"openai"`. Set this when composing {@link OpenAIProvider}
+   * for another OpenAI-wire-compatible gateway (e.g. `"openrouter"`) so a
+   * run's reported provider names the gateway actually in use, not
+   * `"openai"`.
+   */
+  readonly name?: string;
+  /**
+   * The base URL used when {@link ProviderConfig.baseURL} is omitted.
+   * Defaults to {@link DEFAULT_BASE_URL}. An explicit `config.baseURL`
+   * always wins over this.
+   */
+  readonly defaultBaseURL?: string;
 }
 
 async function drain(byteStream: AsyncIterable<Uint8Array>): Promise<string> {
@@ -61,7 +78,7 @@ async function drain(byteStream: AsyncIterable<Uint8Array>): Promise<string> {
  * ```
  */
 export class OpenAIProvider implements IProvider {
-  readonly name = "openai";
+  readonly name: string;
   readonly capabilities: ProviderCapabilities = {
     streaming: true,
     toolCalling: false,
@@ -85,7 +102,8 @@ export class OpenAIProvider implements IProvider {
       );
     }
 
-    this.baseURL = result.data.baseURL ?? DEFAULT_BASE_URL;
+    this.name = deps.name ?? "openai";
+    this.baseURL = result.data.baseURL ?? deps.defaultBaseURL ?? DEFAULT_BASE_URL;
     this.timeoutMs = result.data.timeout ?? DEFAULT_TIMEOUT_MS;
     this.httpClient =
       deps.httpClient ??

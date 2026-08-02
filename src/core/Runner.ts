@@ -1,4 +1,12 @@
 import { randomUUID } from "node:crypto";
+import type { ILogger } from "../logger/Logger.js";
+import type {
+  IMiddleware,
+  MiddlewareNext,
+  MiddlewareRequest,
+  MiddlewareResponse,
+} from "../middleware/Middleware.js";
+import { MiddlewarePipeline } from "../middleware/MiddlewarePipeline.js";
 import type { ProviderRequest, ProviderResponse } from "../providers/AIProvider.js";
 import type { Message, ToolCall, ToolResult } from "../types/index.js";
 import type {
@@ -21,6 +29,9 @@ import { Context } from "./Context.js";
 import { EventEmitter, type EventMap } from "./EventEmitter.js";
 import {
   MaxToolIterationsError,
+  MiddlewareContractError,
+  MiddlewareError,
+  MiddlewareExecutionError,
   ProviderError,
   StreamingNotSupportedError,
   ValidationError,
@@ -102,6 +113,18 @@ export interface RunnerEvents extends EventMap {
   "middleware:error": [event: MiddlewareErrorEvent];
 }
 
+/** Optional, additive configuration accepted as {@link Runner}'s third constructor parameter. */
+export interface RunnerOptions {
+  /**
+   * Middleware run around every provider round trip, before any middleware
+   * configured on the {@link Agent} itself. See {@link Agent.middleware} for
+   * the combined execution order.
+   */
+  readonly middleware?: readonly IMiddleware[];
+  /** Logged to when a {@link MiddlewareError} escapes the pipeline. Defaults to a {@link NoopLogger}, so nothing logs unless explicitly configured. */
+  readonly logger?: ILogger;
+}
+
 /**
  * The execution engine of the SDK.
  *
@@ -127,19 +150,25 @@ export interface RunnerEvents extends EventMap {
 export class Runner {
   private readonly emitter: EventEmitter<RunnerEvents>;
   private readonly outputPipeline: OutputPipeline;
+  private readonly middleware: readonly IMiddleware[];
+  private readonly logger: ILogger | undefined;
 
   /**
-   * Constructs a Runner, optionally with a caller-supplied event emitter
-   * and/or {@link OutputPipeline} of post-processing steps run over every
-   * response before structured-output validation. Both default to fresh,
-   * empty instances.
+   * Constructs a Runner, optionally with a caller-supplied event emitter,
+   * {@link OutputPipeline} of post-processing steps run over every response
+   * before structured-output validation, and {@link RunnerOptions}. All
+   * three default to empty/fresh, so `new Runner()` behaves exactly as
+   * before this option was added.
    */
   constructor(
     emitter: EventEmitter<RunnerEvents> = new EventEmitter<RunnerEvents>(),
     outputPipeline: OutputPipeline = new OutputPipeline(),
+    options: RunnerOptions = {},
   ) {
     this.emitter = emitter;
     this.outputPipeline = outputPipeline;
+    this.middleware = options.middleware ?? [];
+    this.logger = options.logger;
   }
 
   /** Subscribes to a Runner lifecycle event. See {@link RunnerEvents}. */
@@ -217,6 +246,38 @@ export class Runner {
 
     session.addMessage({ role: "user", content: input.message });
 
+    // Runner-level middleware runs first, then the agent's own — see
+    // Agent.middleware and Claude.md §3.5. An empty combined list makes
+    // MiddlewarePipeline the identity function, so behaviour (and
+    // allocation) with no middleware configured is unchanged from before
+    // this pipeline existed.
+    const pipeline = new MiddlewarePipeline([...this.middleware, ...agent.middleware]);
+    const terminal: MiddlewareNext = async (middlewareRequest): Promise<MiddlewareResponse> => {
+      const providerRequest: ProviderRequest = {
+        model: middlewareRequest.model,
+        messages: middlewareRequest.messages,
+        ...(middlewareRequest.tools && middlewareRequest.tools.length > 0
+          ? { tools: middlewareRequest.tools }
+          : {}),
+      };
+      try {
+        const response = await agent.provider.generate(providerRequest);
+        return { response, fromCache: false, attempts: 1 };
+      } catch (cause) {
+        // A subclass (see `src/providers/errors.ts`) already carries structured
+        // failure details, so it is rethrown unchanged rather than erased.
+        const error =
+          cause instanceof ProviderError
+            ? cause
+            : new ProviderError(
+                `Provider "${agent.provider.name}" failed to generate a response: ${
+                  cause instanceof Error ? cause.message : String(cause)
+                }`,
+              );
+        throw error;
+      }
+    };
+
     let finalResponse: ProviderResponse | undefined;
     let iterations = 0;
 
@@ -243,18 +304,38 @@ export class Runner {
       const llmStartedAt = Date.now();
       let response: ProviderResponse;
       try {
-        response = await agent.provider.generate(request);
+        const middlewareRequest: MiddlewareRequest = {
+          runId: context.runId,
+          agentName: agent.name,
+          model: request.model,
+          providerName: agent.provider.name,
+          messages: request.messages,
+          ...(request.tools ? { tools: request.tools } : {}),
+          iteration,
+          context,
+        };
+        const middlewareResult = await pipeline.execute(middlewareRequest, terminal);
+        response = middlewareResult.response;
       } catch (cause) {
-        // A subclass (see `src/providers/errors.ts`) already carries structured
-        // failure details, so it is rethrown unchanged rather than erased.
-        const error =
-          cause instanceof ProviderError
-            ? cause
-            : new ProviderError(
-                `Provider "${agent.provider.name}" failed to generate a response: ${
-                  cause instanceof Error ? cause.message : String(cause)
-                }`,
-              );
+        if (cause instanceof MiddlewareError) {
+          const middlewareName =
+            cause instanceof MiddlewareExecutionError || cause instanceof MiddlewareContractError
+              ? cause.middlewareName
+              : undefined;
+          this.logger?.error(cause.message, { runId: context.runId, iteration });
+          this.emitter.emit("middleware:error", {
+            runId: context.runId,
+            timestamp: new Date(),
+            error: cause,
+            ...(middlewareName !== undefined ? { middlewareName } : {}),
+          });
+          this.emitter.emit("error", context, cause);
+          throw cause;
+        }
+
+        // The terminal handler above already normalizes a raw provider throw
+        // into a ProviderError, so `cause` is that error, unwrapped.
+        const error = cause as ProviderError;
         this.emitter.emit("llm:error", {
           runId: context.runId,
           timestamp: new Date(),

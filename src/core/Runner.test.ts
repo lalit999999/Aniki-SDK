@@ -3,6 +3,7 @@ import { z } from "zod";
 import { Agent } from "./Agent.js";
 import {
   MaxToolIterationsError,
+  MiddlewareExecutionError,
   OutputParseError,
   OutputValidationError,
   ProviderError,
@@ -11,6 +12,7 @@ import {
   ValidationError,
 } from "./errors.js";
 import { Runner } from "./Runner.js";
+import type { MiddlewareNext, MiddlewareRequest } from "../middleware/Middleware.js";
 import { AuthenticationError } from "../providers/errors.js";
 import { Tool } from "../tools/Tool.js";
 import type {
@@ -770,6 +772,139 @@ describe("Runner", () => {
       await runner.run(agent, { message: "Hi again" });
 
       expect(calls).toBe(1);
+    });
+  });
+
+  describe("middleware pipeline wiring", () => {
+    it("behaves identically to no middleware configured when none is given", async () => {
+      const provider: IProvider = {
+        name: "fake",
+        capabilities: FAKE_CAPABILITIES,
+        generate: vi.fn(async (): Promise<ProviderResponse> => ({ content: "hi", model: "gpt-5.5" })),
+        generateStream: fakeGenerateStream,
+      };
+      const agent = createAgent(provider);
+      const runner = new Runner();
+
+      const result = await runner.run(agent, { message: "Hi" });
+
+      expect(result.content).toBe("hi");
+      expect(provider.generate).toHaveBeenCalledTimes(1);
+    });
+
+    it("runs Runner-level middleware before Agent-level middleware", async () => {
+      const provider: IProvider = {
+        name: "fake",
+        capabilities: FAKE_CAPABILITIES,
+        generate: vi.fn(async (): Promise<ProviderResponse> => ({ content: "hi", model: "gpt-5.5" })),
+        generateStream: fakeGenerateStream,
+      };
+      const order: string[] = [];
+      const runnerMiddleware = {
+        name: "RunnerLevel",
+        execute: async (
+          request: MiddlewareRequest,
+          next: MiddlewareNext,
+        ) => {
+          order.push("runner-level:before");
+          const result = await next(request);
+          order.push("runner-level:after");
+          return result;
+        },
+      };
+      const agentMiddleware = {
+        name: "AgentLevel",
+        execute: async (
+          request: MiddlewareRequest,
+          next: MiddlewareNext,
+        ) => {
+          order.push("agent-level:before");
+          const result = await next(request);
+          order.push("agent-level:after");
+          return result;
+        },
+      };
+      const agent = new Agent({
+        name: "Assistant",
+        instructions: "You are a helpful assistant.",
+        model: "gpt-5.5",
+        provider,
+        middleware: [agentMiddleware],
+      });
+      const runner = new Runner(undefined, undefined, { middleware: [runnerMiddleware] });
+
+      await runner.run(agent, { message: "Hi" });
+
+      expect(order).toEqual([
+        "runner-level:before",
+        "agent-level:before",
+        "agent-level:after",
+        "runner-level:after",
+      ]);
+    });
+
+    it("preserves ProviderError wrapping when middleware is configured", async () => {
+      const provider: IProvider = {
+        name: "fake",
+        capabilities: FAKE_CAPABILITIES,
+        generate: vi.fn(async () => {
+          throw new Error("network exploded");
+        }),
+        generateStream: fakeGenerateStream,
+      };
+      const passthrough = {
+        name: "Passthrough",
+        execute: async (
+          request: MiddlewareRequest,
+          next: MiddlewareNext,
+        ) => next(request),
+      };
+      const agent = new Agent({
+        name: "Assistant",
+        instructions: "You are a helpful assistant.",
+        model: "gpt-5.5",
+        provider,
+        middleware: [passthrough],
+      });
+      const runner = new Runner();
+
+      await expect(runner.run(agent, { message: "Hi" })).rejects.toThrow(ProviderError);
+    });
+
+    it("emits middleware:error and the legacy error event, then propagates, when a middleware throws", async () => {
+      const provider: IProvider = {
+        name: "fake",
+        capabilities: FAKE_CAPABILITIES,
+        generate: vi.fn(async (): Promise<ProviderResponse> => ({ content: "hi", model: "gpt-5.5" })),
+        generateStream: fakeGenerateStream,
+      };
+      const broken = {
+        name: "BrokenMiddleware",
+        execute: async () => {
+          throw new Error("middleware exploded");
+        },
+      };
+      const agent = new Agent({
+        name: "Assistant",
+        instructions: "You are a helpful assistant.",
+        model: "gpt-5.5",
+        provider,
+        middleware: [broken],
+      });
+      const runner = new Runner();
+      const seen: string[] = [];
+      let middlewareErrorEvent: { middlewareName?: string } | undefined;
+
+      runner.on("middleware:error", (event) => {
+        seen.push("middleware:error");
+        middlewareErrorEvent = event;
+      });
+      runner.on("error", () => seen.push("error"));
+
+      await expect(runner.run(agent, { message: "Hi" })).rejects.toBeInstanceOf(MiddlewareExecutionError);
+      expect(seen).toEqual(["middleware:error", "error"]);
+      expect(middlewareErrorEvent?.middlewareName).toBe("BrokenMiddleware");
+      expect(provider.generate).not.toHaveBeenCalled();
     });
   });
 

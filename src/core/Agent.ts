@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { ProviderName } from "../config/Config.js";
+import type { IMiddleware } from "../middleware/Middleware.js";
 import type { IProvider } from "../providers/AIProvider.js";
 import { ProviderFactory } from "../providers/ProviderFactory.js";
 import type { Tool } from "../tools/Tool.js";
@@ -45,8 +46,8 @@ export interface AgentOptions<TOutput = undefined> {
   readonly tools?: readonly Tool[];
   /** The maximum number of tool-calling iterations {@link Runner} runs before throwing {@link MaxToolIterationsError}. Defaults to `5`. */
   readonly maxToolIterations?: number;
-  // Real Middleware type lands in a later task; empty arrays are the expected default until then.
-  readonly middleware?: readonly unknown[];
+  /** Middleware {@link Runner} runs around every provider round trip for this agent, after any Runner-level middleware. Must each implement {@link IMiddleware} — enforced at construction. Defaults to an empty array. */
+  readonly middleware?: readonly IMiddleware[];
 }
 
 /**
@@ -80,7 +81,7 @@ export class Agent<TOutput = undefined> {
   private readonly _tools: readonly Tool[];
   private readonly _toolRegistry: ToolRegistry;
   private readonly _maxToolIterations: number;
-  private readonly _middleware: readonly unknown[];
+  private readonly _middleware: readonly IMiddleware[];
 
   /** Constructs an Agent. Throws {@link ValidationError} if the configuration is invalid. */
   constructor(options: AgentOptions<TOutput>) {
@@ -100,6 +101,17 @@ export class Agent<TOutput = undefined> {
     if (options.output !== undefined && !(options.output instanceof z.ZodType)) {
       throw new ValidationError("Invalid Agent configuration: output must be a Zod schema");
     }
+    const middleware = options.middleware ?? [];
+    for (const entry of middleware) {
+      if (
+        !entry ||
+        typeof entry.name !== "string" ||
+        entry.name.length === 0 ||
+        typeof entry.execute !== "function"
+      ) {
+        throw new ValidationError("Invalid Agent configuration: middleware must implement IMiddleware");
+      }
+    }
 
     this._name = result.data.name;
     this._instructions = result.data.instructions;
@@ -110,7 +122,7 @@ export class Agent<TOutput = undefined> {
     this._tools = options.tools ?? [];
     this._toolRegistry = new ToolRegistry(this._tools);
     this._maxToolIterations = result.data.maxToolIterations ?? DEFAULT_MAX_TOOL_ITERATIONS;
-    this._middleware = options.middleware ?? [];
+    this._middleware = middleware;
   }
 
   /** This agent's name. */
@@ -158,8 +170,8 @@ export class Agent<TOutput = undefined> {
     return this._maxToolIterations;
   }
 
-  /** This agent's configured middleware. Empty until the Middleware task lands. */
-  get middleware(): readonly unknown[] {
+  /** This agent's configured middleware, run around every provider round trip after any Runner-level middleware. */
+  get middleware(): readonly IMiddleware[] {
     return this._middleware;
   }
 }

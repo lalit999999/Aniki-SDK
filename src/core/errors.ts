@@ -1,5 +1,6 @@
 import type { ProviderResponseError } from "../providers/errors.js";
 import { redactFields } from "../logger/Logger.js";
+import { truncate } from "../utils/string.js";
 
 /**
  * The SDK-wide error taxonomy.
@@ -359,11 +360,6 @@ export class MaxToolIterationsError extends ToolError {
 /** Raw model text carried by an output error is truncated to this many characters. */
 const MAX_RAW_SNIPPET_LENGTH = 500;
 
-/** Truncates `raw` to {@link MAX_RAW_SNIPPET_LENGTH} characters so errors never carry unbounded model output. */
-function truncateRaw(raw: string): string {
-  return raw.length > MAX_RAW_SNIPPET_LENGTH ? `${raw.slice(0, MAX_RAW_SNIPPET_LENGTH)}...` : raw;
-}
-
 /**
  * Abstract base for every structured-output error.
  *
@@ -379,7 +375,7 @@ export class OutputParseError extends OutputError {
   readonly raw: string;
 
   constructor(message: string, raw: string, cause?: unknown) {
-    const truncated = truncateRaw(raw);
+    const truncated = truncate(raw, MAX_RAW_SNIPPET_LENGTH);
     super(message, cause, { raw: truncated });
     this.name = "OutputParseError";
     this.raw = truncated;
@@ -395,7 +391,7 @@ export class OutputValidationError extends OutputError {
   readonly raw: string;
 
   constructor(issues: string, raw: string) {
-    const truncated = truncateRaw(raw);
+    const truncated = truncate(raw, MAX_RAW_SNIPPET_LENGTH);
     super(`Structured output failed schema validation: ${issues}`, undefined, {
       issues,
       raw: truncated,

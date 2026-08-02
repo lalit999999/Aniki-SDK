@@ -3,14 +3,19 @@ export type { AnikiConfigOptions, ProviderName } from "./config/Config.js";
 export type { ProviderConfig } from "./config/ProviderConfig.js";
 export {
   AnikiError,
+  CacheError,
   ConfigurationError,
   DuplicateToolError,
   MaxToolIterationsError,
+  MiddlewareContractError,
+  MiddlewareError,
+  MiddlewareExecutionError,
   OutputError,
   OutputParseError,
   OutputProcessingError,
   OutputValidationError,
   ProviderError,
+  RetryExhaustedError,
   StreamAbortedError,
   StreamConsumedError,
   StreamError,
@@ -35,11 +40,40 @@ export type { EventMap, Listener } from "./core/EventEmitter.js";
 
 export { Memory } from "./core/Memory.js";
 
+export { ConsoleLogger } from "./logger/ConsoleLogger.js";
+export type { ConsoleLoggerOptions, ConsoleSink } from "./logger/ConsoleLogger.js";
+
+export { LOG_LEVEL_PRIORITY, NoopLogger, redactFields } from "./logger/Logger.js";
+export type { ILogger, LogFields, LogLevel } from "./logger/Logger.js";
+
+export { BaseMiddleware } from "./middleware/Middleware.js";
+export type {
+  IMiddleware,
+  MiddlewareNext,
+  MiddlewareRequest,
+  MiddlewareResponse,
+} from "./middleware/Middleware.js";
+
+export { MiddlewarePipeline } from "./middleware/MiddlewarePipeline.js";
+
+export { LoggingMiddleware } from "./middleware/LoggerMiddleware.js";
+export type { LoggingMiddlewareOptions } from "./middleware/LoggerMiddleware.js";
+
+export { RetryMiddleware } from "./middleware/RetryMiddleware.js";
+export type { RetryMiddlewareOptions } from "./middleware/RetryMiddleware.js";
+
+export { CacheMiddleware, InMemoryCacheStore } from "./middleware/CacheMiddleware.js";
+export type {
+  CacheMiddlewareOptions,
+  ICacheStore,
+  InMemoryCacheStoreOptions,
+} from "./middleware/CacheMiddleware.js";
+
 export { InMemorySession } from "./core/Session.js";
 export type { ISession } from "./core/Session.js";
 
 export { Runner } from "./core/Runner.js";
-export type { RunInput, RunResult, RunnerEvents } from "./core/Runner.js";
+export type { RunInput, RunnerEvents, RunnerOptions, RunResult } from "./core/Runner.js";
 
 export { RunStream } from "./core/RunStream.js";
 export type { RunStreamOptions } from "./core/RunStream.js";
@@ -126,3 +160,21 @@ export type {
   ToolDefinition,
   ToolResult,
 } from "./types/index.js";
+
+export { EVENT_NAMES, LEGACY_EVENT_ALIASES } from "./types/events.js";
+export type {
+  AgentEndEvent,
+  AgentErrorEvent,
+  AgentStartEvent,
+  AnikiEvents,
+  BaseEventPayload,
+  EventName,
+  LlmEndEvent,
+  LlmErrorEvent,
+  LlmStartEvent,
+  MiddlewareErrorEvent,
+  TimedEventPayload,
+  ToolEndEvent,
+  ToolErrorEvent,
+  ToolStartEvent,
+} from "./types/events.js";

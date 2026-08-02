@@ -194,6 +194,38 @@ describe("Agent", () => {
     ).toThrow(ValidationError);
   });
 
+  describe("structured output schema", () => {
+    it("infers Agent<TOutput> from the output schema", () => {
+      const schema = z.object({ email: z.string() });
+      const agent = new Agent({
+        name: "Assistant",
+        instructions: "Be helpful.",
+        model: "gpt-5.5",
+        provider: createFakeProvider(),
+        output: schema,
+      });
+
+      // Compile-time check: agent.output is typed z.ZodType<{ email: string }> | undefined.
+      const parsed = agent.output?.parse({ email: "lalit@example.com" });
+      expect(parsed?.email).toBe("lalit@example.com");
+    });
+
+    it("throws ValidationError when output is not a Zod schema", () => {
+      const notASchema = { parse: () => undefined } as unknown as z.ZodType<unknown>;
+
+      expect(
+        () =>
+          new Agent({
+            name: "Assistant",
+            instructions: "Be helpful.",
+            model: "gpt-5.5",
+            provider: createFakeProvider(),
+            output: notASchema,
+          }),
+      ).toThrow(ValidationError);
+    });
+  });
+
   describe("string provider resolution", () => {
     afterEach(() => {
       vi.unstubAllEnvs();

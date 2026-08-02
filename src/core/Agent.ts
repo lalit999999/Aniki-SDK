@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { z, type ZodTypeAny } from "zod";
+import { z } from "zod";
 import type { ProviderName } from "../config/Config.js";
 import type { IProvider } from "../providers/AIProvider.js";
 import { ProviderFactory } from "../providers/ProviderFactory.js";
@@ -19,7 +19,7 @@ const agentSchema = z.object({
 });
 
 /** Options accepted by the {@link Agent} constructor. */
-export interface AgentOptions {
+export interface AgentOptions<TOutput = undefined> {
   /** A short, human-readable name for this agent. */
   readonly name: string;
   /** The system instructions/persona guiding the agent's behavior. */
@@ -34,8 +34,13 @@ export interface AgentOptions {
   readonly provider: IProvider | ProviderName;
   /** The conversation session this agent reads and writes history to. Defaults to a fresh in-memory session. */
   readonly session?: ISession;
-  /** The Zod schema the final response must validate against, if structured output is required. */
-  readonly output?: ZodTypeAny;
+  /**
+   * The Zod schema the final response must validate against. Setting this
+   * infers `TOutput`, so `new Agent({ output: UserSchema })` yields an
+   * `Agent<User>` whose {@link Runner} results carry a typed, validated
+   * `output` field.
+   */
+  readonly output?: z.ZodType<TOutput>;
   /** The tools this agent may call. Must have unique names — enforced at construction via {@link ToolRegistry}. */
   readonly tools?: readonly Tool[];
   /** The maximum number of tool-calling iterations {@link Runner} runs before throwing {@link MaxToolIterationsError}. Defaults to `5`. */
@@ -49,7 +54,10 @@ export interface AgentOptions {
  *
  * Agent never communicates with a provider directly — it only stores the
  * metadata, instructions, tools, output schema, model, middleware, session,
- * and provider that {@link Runner} later composes and orchestrates.
+ * and provider that {@link Runner} later composes and orchestrates. It is
+ * generic over `TOutput`, the type its structured `output` schema validates
+ * to; an agent constructed with no `output` schema is `Agent<undefined>`,
+ * so every existing call site keeps compiling unchanged.
  *
  * @example
  * ```ts
@@ -58,23 +66,24 @@ export interface AgentOptions {
  *   instructions: "You are a helpful assistant.",
  *   model: "gpt-5.5",
  *   provider: someProviderImplementingIProvider,
+ *   output: z.object({ email: z.string() }), // infers Agent<{ email: string }>
  * });
  * ```
  */
-export class Agent {
+export class Agent<TOutput = undefined> {
   private readonly _name: string;
   private readonly _instructions: string;
   private readonly _model: string;
   private readonly _provider: IProvider;
   private readonly _session: ISession;
-  private readonly _output: ZodTypeAny | undefined;
+  private readonly _output: z.ZodType<TOutput> | undefined;
   private readonly _tools: readonly Tool[];
   private readonly _toolRegistry: ToolRegistry;
   private readonly _maxToolIterations: number;
   private readonly _middleware: readonly unknown[];
 
   /** Constructs an Agent. Throws {@link ValidationError} if the configuration is invalid. */
-  constructor(options: AgentOptions) {
+  constructor(options: AgentOptions<TOutput>) {
     const result = agentSchema.safeParse(options);
     if (!result.success) {
       throw new ValidationError(
@@ -87,6 +96,9 @@ export class Agent {
         : options.provider;
     if (!provider || typeof provider.generate !== "function") {
       throw new ValidationError("Invalid Agent configuration: provider must implement IProvider");
+    }
+    if (options.output !== undefined && !(options.output instanceof z.ZodType)) {
+      throw new ValidationError("Invalid Agent configuration: output must be a Zod schema");
     }
 
     this._name = result.data.name;
@@ -127,7 +139,7 @@ export class Agent {
   }
 
   /** The Zod schema the final response must validate against, if any. */
-  get output(): ZodTypeAny | undefined {
+  get output(): z.ZodType<TOutput> | undefined {
     return this._output;
   }
 

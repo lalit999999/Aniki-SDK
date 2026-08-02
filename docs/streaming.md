@@ -210,7 +210,7 @@ try {
 ## API Reference
 
 See [`Runner.stream`](./api-reference.md#runner), [`RunStream`](./api-reference.md#runstream), and
-[`StreamEvent`](./api-reference.md#streamevent) in the API Reference.
+[`StreamEvent`](./api-reference.md#streamevent-type) in the API Reference.
 
 ## Related Pages
 

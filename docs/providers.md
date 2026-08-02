@@ -223,6 +223,12 @@ highest first:
 If no API key is found from any of these sources for a known provider name, `ConfigurationError` is
 thrown immediately — at `Agent` construction time, not on the first `runner.run` call.
 
+## API Reference
+
+See [`IProvider`](./api-reference.md#iprovider-type), [`OpenAIProvider`](./api-reference.md#openaiprovider),
+[`ProviderFactory`](./api-reference.md#providerfactory), and
+[`ProviderRegistry`](./api-reference.md#providerregistry) in the API Reference.
+
 ## Related Pages
 
 - [Generating Text](./generate-text.md)

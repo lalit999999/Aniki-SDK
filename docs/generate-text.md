@@ -185,9 +185,9 @@ it doesn't depend on `capabilities.structuredOutput` at all. See
 
 ## API Reference
 
-See [`Runner.run`](./api-reference.md#runner), [`RunResult`](./api-reference.md#runresult),
-[`GenerationParams`](./api-reference.md#generationparams), and
-[`ProviderResponse`](./api-reference.md#providerresponse) in the API Reference.
+See [`Runner.run`](./api-reference.md#runner), [`RunResult`](./api-reference.md#runresult-type),
+[`GenerationParams`](./api-reference.md#generationparams-type), and
+[`ProviderResponse`](./api-reference.md#providerresponse-type) in the API Reference.
 
 ## Related Pages
 

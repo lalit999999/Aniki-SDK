@@ -81,10 +81,11 @@ unset.
 
 ## Core
 
-### `Agent<TOutput = undefined>`
+### `Agent`
 
-A pure configuration container. Never communicates with a provider directly. See
-[Your First Agent](./first-agent.md).
+A pure configuration container. Never communicates with a provider directly. Generic over
+`TOutput` — `new Agent({ output: schema })` yields an `Agent<TOutput>` whose `RunResult.output` is
+typed accordingly. See [Your First Agent](./first-agent.md).
 
 **Constructor:** `new Agent(options: AgentOptions<TOutput>)`
 **Throws:** `ValidationError` if `options` is invalid (missing required fields, a `provider` that
@@ -119,9 +120,9 @@ const agent = new Agent({
 | `maxToolIterations?` | `number` | `5` | |
 | `middleware?` | `readonly IMiddleware[]` | `[]` | |
 
-### `Context<TAgent = unknown, TInput = unknown>`
+### `Context`
 
-Per-run, request-scoped execution state. A fresh instance is created on every `Runner.run`/`stream`
+Per-run, request-scoped execution state. Generic over `TAgent`/`TInput`. A fresh instance is created on every `Runner.run`/`stream`
 call. Unrelated to conversation history — see [Memory](./memory.md#context-not-memory).
 
 **Constructor:** `new Context(options: ContextOptions<TAgent, TInput>)`
@@ -254,7 +255,9 @@ pre-rename aliases (`agent:started`, `agent:finished`, `llm:request`, `llm:respo
 | `middleware?` | `readonly IMiddleware[]` | `[]` | Runs before any agent-level middleware. |
 | `logger?` | `ILogger` | `NoopLogger` | Logged to when a `MiddlewareError` escapes the pipeline. |
 
-### `RunResult<TOutput = undefined>` (type)
+### `RunResult` (type)
+
+Generic over `TOutput`, matching the `Agent` it was produced from.
 
 | Field | Type | Description |
 | --- | --- | --- |
@@ -266,9 +269,9 @@ pre-rename aliases (`agent:started`, `agent:finished`, `llm:request`, `llm:respo
 | `iterations` | `number` | Provider round trips this turn took. |
 | `metadata` | `RunMetadata` | |
 
-### `RunStream<TOutput = undefined>`
+### `RunStream`
 
-The one-shot handle returned by `Runner.stream`. See [Streaming](./streaming.md) for full behavior.
+The one-shot handle returned by `Runner.stream`. Generic over `TOutput`. See [Streaming](./streaming.md) for full behavior.
 
 **Not constructed directly** — always via `Runner.stream`.
 
@@ -291,9 +294,10 @@ the type is exported.
 
 ## Tools
 
-### `Tool<TInput = unknown, TOutput = unknown>`
+### `Tool`
 
-A pure, self-describing tool definition. See [Tools](./tools.md).
+A pure, self-describing tool definition. Generic over `TInput`/`TOutput`. See
+[Tools](./tools.md).
 
 **Constructor:** `new Tool(options: ToolOptions<TInput, TOutput>)`
 **Throws:** `ValidationError` for an invalid `name` (must match `/^[a-zA-Z0-9_-]{1,64}$/`), a

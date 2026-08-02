@@ -213,7 +213,7 @@ conversation history. Don't reach for `Context` when you mean `ISession`, or vic
 
 ## API Reference
 
-See [`ISession`](./api-reference.md#isession), [`InMemorySession`](./api-reference.md#inmemorysession),
+See [`ISession`](./api-reference.md#isession-type), [`InMemorySession`](./api-reference.md#inmemorysession),
 [`Memory`](./api-reference.md#memory), and [`Context`](./api-reference.md#context) in the API
 Reference.
 

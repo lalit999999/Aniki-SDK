@@ -1,6 +1,17 @@
 import { randomUUID } from "node:crypto";
 import type { ProviderRequest, ProviderResponse } from "../providers/AIProvider.js";
 import type { Message, ToolCall, ToolResult } from "../types/index.js";
+import type {
+  AgentEndEvent,
+  AgentErrorEvent,
+  AgentStartEvent,
+  LlmEndEvent,
+  LlmErrorEvent,
+  LlmStartEvent,
+  MiddlewareErrorEvent,
+  ToolEndEvent,
+  ToolStartEvent,
+} from "../types/events.js";
 import type { RunMetadata } from "../types/output.js";
 import { OutputPipeline } from "../parser/OutputPipeline.js";
 import { StructuredOutputParser } from "../parser/StructuredOutput.js";
@@ -47,16 +58,48 @@ export interface RunResult<TOutput = undefined> {
  */
 type RunnerContext = Context<unknown, RunInput>;
 
-/** Lifecycle events emitted by {@link Runner} over the course of a run. */
+/**
+ * Lifecycle events emitted by {@link Runner} over the course of a run.
+ *
+ * Combines the canonical event names from `src/types/events.ts` with every
+ * pre-Task-6 legacy name, so existing subscribers keep working unchanged.
+ * `Runner` emits each canonical event immediately followed by its legacy
+ * counterpart (see {@link LEGACY_EVENT_ALIASES}); events with no renamed
+ * predecessor (`agent:error`, `llm:error`, `middleware:error`) are emitted
+ * canonically only.
+ *
+ * `"tool:error"` is the one name that did not change across the rename —
+ * `Runner` predates the canonical event contracts and already shipped it
+ * with a `(context, call, error)` payload, which existing subscribers (and
+ * this SDK's own tests) depend on; that shape is kept here rather than
+ * switched to the generic single-object {@link ToolErrorEvent}, so this
+ * event is emitted exactly once, not twice.
+ */
 export interface RunnerEvents extends EventMap {
+  /** @deprecated Use `"agent:start"` instead. */
   "agent:started": [context: RunnerContext];
+  /** @deprecated Use `"agent:end"` instead. */
   "agent:finished": [context: RunnerContext, result: RunResult<unknown>];
+  /** @deprecated Use `"llm:start"` instead. */
   "llm:request": [context: RunnerContext, request: ProviderRequest];
+  /** @deprecated Use `"llm:end"` instead. */
   "llm:response": [context: RunnerContext, response: ProviderResponse];
+  /** @deprecated Use `"tool:start"` instead. */
   "tool:started": [context: RunnerContext, call: ToolCall];
+  /** @deprecated Use `"tool:end"` instead. */
   "tool:finished": [context: RunnerContext, result: ToolResult];
   "tool:error": [context: RunnerContext, call: ToolCall, error: Error];
   error: [context: RunnerContext, error: Error];
+
+  "agent:start": [event: AgentStartEvent];
+  "agent:end": [event: AgentEndEvent];
+  "agent:error": [event: AgentErrorEvent];
+  "llm:start": [event: LlmStartEvent];
+  "llm:end": [event: LlmEndEvent];
+  "llm:error": [event: LlmErrorEvent];
+  "tool:start": [event: ToolStartEvent];
+  "tool:end": [event: ToolEndEvent];
+  "middleware:error": [event: MiddlewareErrorEvent];
 }
 
 /**
@@ -107,6 +150,19 @@ export class Runner {
     return this.emitter.on(event, listener);
   }
 
+  /** Unsubscribes `listener` from `event`. No-op if it wasn't subscribed. */
+  off<K extends keyof RunnerEvents>(event: K, listener: (...args: RunnerEvents[K]) => void): void {
+    this.emitter.off(event, listener);
+  }
+
+  /** Subscribes `listener` to `event` for a single invocation, then automatically unsubscribes. */
+  once<K extends keyof RunnerEvents>(
+    event: K,
+    listener: (...args: RunnerEvents[K]) => void,
+  ): () => void {
+    return this.emitter.once(event, listener);
+  }
+
   /**
    * Executes one full turn for `agent` given `input`.
    *
@@ -141,6 +197,13 @@ export class Runner {
     }
 
     const context: RunnerContext = new Context({ agent, input });
+    this.emitter.emit("agent:start", {
+      runId: context.runId,
+      timestamp: context.startedAt,
+      agentName: agent.name,
+      model: agent.model,
+      providerName: agent.provider.name,
+    });
     this.emitter.emit("agent:started", context);
 
     const session = agent.session;
@@ -166,8 +229,18 @@ export class Runner {
         ...(toolDefinitions.length > 0 ? { tools: toolDefinitions } : {}),
       };
 
+      this.emitter.emit("llm:start", {
+        runId: context.runId,
+        timestamp: new Date(),
+        agentName: agent.name,
+        model: agent.model,
+        providerName: agent.provider.name,
+        iteration,
+        messageCount: request.messages.length,
+      });
       this.emitter.emit("llm:request", context, request);
 
+      const llmStartedAt = Date.now();
       let response: ProviderResponse;
       try {
         response = await agent.provider.generate(request);
@@ -182,10 +255,30 @@ export class Runner {
                   cause instanceof Error ? cause.message : String(cause)
                 }`,
               );
+        this.emitter.emit("llm:error", {
+          runId: context.runId,
+          timestamp: new Date(),
+          agentName: agent.name,
+          model: agent.model,
+          providerName: agent.provider.name,
+          iteration,
+          error,
+        });
         this.emitter.emit("error", context, error);
         throw error;
       }
 
+      this.emitter.emit("llm:end", {
+        runId: context.runId,
+        timestamp: new Date(),
+        durationMs: Date.now() - llmStartedAt,
+        agentName: agent.name,
+        model: agent.model,
+        providerName: agent.provider.name,
+        iteration,
+        ...(response.finishReason !== undefined ? { finishReason: response.finishReason } : {}),
+        ...(response.usage !== undefined ? { usage: response.usage } : {}),
+      });
       this.emitter.emit("llm:response", context, response);
 
       const toolCalls = response.toolCalls;
@@ -198,6 +291,13 @@ export class Runner {
       session.addMessage({ role: "assistant", content: response.content, toolCalls });
 
       for (const call of toolCalls) {
+        this.emitter.emit("tool:start", {
+          runId: context.runId,
+          timestamp: new Date(),
+          toolName: call.name,
+          toolCallId: call.id,
+          call,
+        });
         this.emitter.emit("tool:started", context, call);
       }
 
@@ -205,6 +305,14 @@ export class Runner {
       for (const result of results) {
         toolResults.push(result);
         if (result.ok) {
+          this.emitter.emit("tool:end", {
+            runId: context.runId,
+            timestamp: new Date(),
+            durationMs: result.durationMs,
+            toolName: result.toolName,
+            toolCallId: result.toolCallId,
+            ok: true,
+          });
           this.emitter.emit("tool:finished", context, result);
         } else {
           const call = toolCalls.find((c) => c.id === result.toolCallId);
@@ -230,6 +338,12 @@ export class Runner {
 
     if (!finalResponse) {
       const error = new MaxToolIterationsError(agent.maxToolIterations);
+      this.emitter.emit("agent:error", {
+        runId: context.runId,
+        timestamp: new Date(),
+        agentName: agent.name,
+        error,
+      });
       this.emitter.emit("error", context, error);
       throw error;
     }
@@ -258,6 +372,12 @@ export class Runner {
       output = outputParser ? outputParser.parse(processed.text) : (undefined as TOutput);
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
+      this.emitter.emit("agent:error", {
+        runId: context.runId,
+        timestamp: new Date(),
+        agentName: agent.name,
+        error: err,
+      });
       this.emitter.emit("error", context, err);
       throw error;
     }
@@ -272,6 +392,15 @@ export class Runner {
       metadata,
     };
 
+    this.emitter.emit("agent:end", {
+      runId: context.runId,
+      timestamp: new Date(),
+      durationMs: metadata.durationMs,
+      agentName: agent.name,
+      model: finalResponse.model,
+      providerName: agent.provider.name,
+      iterations,
+    });
     this.emitter.emit("agent:finished", context, result);
 
     return result;

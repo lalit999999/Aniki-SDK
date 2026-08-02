@@ -1,11 +1,8 @@
 import { z } from "zod";
-import {
-  ToolInputValidationError,
-  ToolOutputValidationError,
-  ValidationError,
-} from "../core/errors.js";
+import { ToolInputValidationError, ToolOutputValidationError } from "../core/errors.js";
 import type { ToolDefinition } from "../types/tool.js";
 import { formatZodIssues } from "../utils/index.js";
+import { Guard } from "../validation/Guard.js";
 
 /** The pattern every tool name must match — the intersection of what major vendors accept. */
 const TOOL_NAME_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
@@ -99,33 +96,37 @@ export class Tool<TInput = unknown, TOutput = unknown> {
 
   /** Constructs a Tool. Throws {@link ValidationError} if the configuration is invalid. */
   constructor(options: ToolOptions<TInput, TOutput>) {
-    const result = toolOptionsSchema.safeParse(options);
-    if (!result.success) {
-      throw new ValidationError(
-        `Invalid Tool configuration: ${formatZodIssues(result.error.issues)}`,
+    const result = Guard.fromZod(toolOptionsSchema.safeParse(options), "Invalid Tool configuration");
+    Guard.assertZodSchema(
+      options.input,
+      "Tool.input",
+      "Pass a Zod schema, e.g. z.object({ city: z.string() }).",
+    );
+    if (options.output !== undefined) {
+      Guard.assertZodSchema(
+        options.output,
+        "Tool.output",
+        "Pass a Zod schema, e.g. z.object({ ... }), or omit it entirely.",
       );
     }
-    if (!(options.input instanceof z.ZodType)) {
-      throw new ValidationError("Invalid Tool configuration: input must be a Zod schema");
-    }
-    if (options.output !== undefined && !(options.output instanceof z.ZodType)) {
-      throw new ValidationError("Invalid Tool configuration: output must be a Zod schema");
-    }
-    if (typeof options.execute !== "function") {
-      throw new ValidationError("Invalid Tool configuration: execute must be a function");
-    }
+    Guard.assertInstanceOf(
+      options.execute,
+      Function,
+      "Tool.execute",
+      "Pass a function performing the tool's work, e.g. execute: async (input) => ({ ... }).",
+    );
 
-    this._name = result.data.name;
-    this._description = result.data.description;
+    this._name = result.name;
+    this._description = result.description;
     this._inputSchema = options.input;
     this._outputSchema = options.output;
     this._execute = options.execute as (
       input: unknown,
       context?: ToolContext,
     ) => Promise<TOutput> | TOutput;
-    this._timeoutMs = result.data.timeoutMs;
-    this._retries = result.data.retries;
-    this._cache = result.data.cache;
+    this._timeoutMs = result.timeoutMs;
+    this._retries = result.retries;
+    this._cache = result.cache;
     this._tags = options.tags ?? [];
     this._metadata = options.metadata ?? {};
   }

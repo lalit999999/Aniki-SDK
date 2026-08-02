@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { ValidationError } from "./errors.js";
+import { Guard } from "../validation/Guard.js";
 
 /** Options accepted by the {@link Context} constructor. */
 export interface ContextOptions<TAgent = unknown, TInput = unknown> {
@@ -40,12 +40,8 @@ export class Context<TAgent = unknown, TInput = unknown> {
 
   /** Constructs a new run context. Throws {@link ValidationError} if a required field is missing. */
   constructor(options: ContextOptions<TAgent, TInput>) {
-    if (options.agent === undefined || options.agent === null) {
-      throw new ValidationError("Context requires an agent");
-    }
-    if (options.input === undefined || options.input === null) {
-      throw new ValidationError("Context requires input");
-    }
+    Guard.assertDefined(options.agent, "Context.agent", "Pass the resolved Agent for this run.");
+    Guard.assertDefined(options.input, "Context.input", "Pass the input driving this run.");
 
     this.agent = options.agent;
     this.input = options.input;

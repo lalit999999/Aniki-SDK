@@ -1,6 +1,6 @@
 import type { Message } from "../types/index.js";
 import { Memory } from "./Memory.js";
-import { ValidationError } from "./errors.js";
+import { Guard } from "../validation/Guard.js";
 
 /**
  * Storage-independent conversation history, keyed by session id.
@@ -39,9 +39,7 @@ export class InMemorySession implements ISession {
 
   /** Constructs a session keyed by `id`. Throws {@link ValidationError} if `id` is empty. */
   constructor(id: string) {
-    if (typeof id !== "string" || id.length === 0) {
-      throw new ValidationError("Session id must be a non-empty string");
-    }
+    Guard.assertNonEmptyString(id, "InMemorySession.id");
     this.id = id;
   }
 

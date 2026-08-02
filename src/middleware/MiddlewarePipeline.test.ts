@@ -177,4 +177,17 @@ describe("MiddlewarePipeline management", () => {
     expect(snapshot.map((m) => m.name)).toEqual(["A"]);
     expect(pipeline.list().map((m) => m.name)).toEqual(["A", "B"]);
   });
+
+  it("constructor throws ValidationError when an entry does not implement IMiddleware", () => {
+    expect(() => new MiddlewarePipeline([{ name: "A" } as unknown as IMiddleware])).toThrow(
+      ValidationError,
+    );
+  });
+
+  it("use() throws ValidationError when given something that does not implement IMiddleware", () => {
+    const pipeline = new MiddlewarePipeline();
+
+    expect(() => pipeline.use({ name: "" } as unknown as IMiddleware)).toThrow(ValidationError);
+    expect(() => pipeline.use(null as unknown as IMiddleware)).toThrow(ValidationError);
+  });
 });

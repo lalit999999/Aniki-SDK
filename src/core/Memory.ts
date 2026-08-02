@@ -21,21 +21,36 @@ export class Memory {
   /** Appends `message` to the store. Throws {@link ValidationError} if it is malformed. */
   addMessage(message: Message): void {
     if (!isRole(message.role)) {
-      throw new ValidationError(`Invalid message role: ${String(message.role)}`);
+      throw new ValidationError(`Invalid message role: ${String(message.role)}`, {
+        subject: "Memory.addMessage(message).role",
+        received: message.role,
+      });
     }
     if (typeof message.content !== "string") {
-      throw new ValidationError("Message content must be a string");
+      throw new ValidationError("Message content must be a string", {
+        subject: "Memory.addMessage(message).content",
+        received: message.content,
+      });
     }
 
     const hasToolCalls = message.toolCalls !== undefined && message.toolCalls.length > 0;
     if (message.content.length === 0 && !(message.role === "assistant" && hasToolCalls)) {
-      throw new ValidationError("Message content must be a non-empty string");
+      throw new ValidationError("Message content must be a non-empty string", {
+        subject: "Memory.addMessage(message).content",
+        received: message.content,
+      });
     }
     if (message.toolCalls !== undefined && message.role !== "assistant") {
-      throw new ValidationError('Only an "assistant" message may carry toolCalls');
+      throw new ValidationError('Only an "assistant" message may carry toolCalls', {
+        subject: "Memory.addMessage(message).role",
+        received: message.role,
+      });
     }
     if (message.role === "tool" && !message.toolCallId) {
-      throw new ValidationError('A "tool" message requires a toolCallId');
+      throw new ValidationError('A "tool" message requires a toolCallId', {
+        subject: "Memory.addMessage(message).toolCallId",
+        received: message.toolCallId,
+      });
     }
 
     this.messages.push(

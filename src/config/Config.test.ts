@@ -58,6 +58,32 @@ describe("AnikiSDK", () => {
     expect(sdk.getConfig().apiKey).toBe("env-anthropic-key");
   });
 
+  it("falls back to defaultProvider's env var when provider is omitted", () => {
+    vi.stubEnv("OPENAI_API_KEY", "env-openai-key");
+
+    sdk.configure({ defaultProvider: "openai" });
+
+    expect(sdk.getConfig().apiKey).toBe("env-openai-key");
+  });
+
+  it("leaves apiKey undefined when neither provider nor defaultProvider is configured", () => {
+    sdk.configure({ timeout: 5000 });
+
+    expect(sdk.getConfig().apiKey).toBeUndefined();
+  });
+
+  it("attaches subject and issues to a thrown ConfigurationError's context", () => {
+    try {
+      sdk.configure({ timeout: -1 });
+      expect.unreachable();
+    } catch (error) {
+      expect(error).toBeInstanceOf(ConfigurationError);
+      const configError = error as ConfigurationError;
+      expect(configError.context["subject"]).toBe("Aniki.configure");
+      expect(typeof configError.context["issues"]).toBe("string");
+    }
+  });
+
   it("throws ConfigurationError on invalid input instead of a raw error", () => {
     expect(() => sdk.configure({ timeout: -1 })).toThrow(ConfigurationError);
     expect(() => sdk.configure({ retryCount: -5 })).toThrow(ConfigurationError);

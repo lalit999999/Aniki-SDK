@@ -1,5 +1,6 @@
 import { DuplicateToolError, ToolNotFoundError } from "../core/errors.js";
 import type { ToolDefinition } from "../types/tool.js";
+import { Guard } from "../validation/Guard.js";
 import { Tool } from "./Tool.js";
 
 /**
@@ -27,6 +28,7 @@ export class ToolRegistry {
 
   /** Registers `tool`. Throws {@link DuplicateToolError} if its name is already registered. */
   register(tool: Tool): void {
+    Guard.assertInstanceOf(tool, Tool, "ToolRegistry.register(tool)");
     if (this.tools.has(tool.name)) {
       throw new DuplicateToolError(tool.name);
     }
@@ -39,6 +41,7 @@ export class ToolRegistry {
    * are added and {@link DuplicateToolError} is thrown for the first collision.
    */
   registerAll(tools: Iterable<Tool>): void {
+    Guard.assertDefined(tools, "ToolRegistry.registerAll(tools)");
     const incoming = [...tools];
     const seen = new Set<string>();
 

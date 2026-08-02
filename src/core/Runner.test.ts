@@ -82,6 +82,18 @@ function makeWeatherTool(execute: (input: { city: string }) => Promise<{ tempC: 
   });
 }
 
+describe("Runner constructor validation", () => {
+  it("throws ValidationError when an options.middleware entry does not implement IMiddleware", () => {
+    expect(
+      () => new Runner(undefined, undefined, { middleware: [{ name: "" } as never] }),
+    ).toThrow(ValidationError);
+  });
+
+  it("accepts an empty middleware array (the default)", () => {
+    expect(() => new Runner(undefined, undefined, { middleware: [] })).not.toThrow();
+  });
+});
+
 describe("Runner", () => {
   it("executes a full run against a fake provider and returns a typed result", async () => {
     const provider: IProvider = {

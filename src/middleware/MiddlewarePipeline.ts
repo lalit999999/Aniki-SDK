@@ -1,5 +1,18 @@
-import { AnikiError, MiddlewareContractError, MiddlewareExecutionError } from "../core/errors.js";
+import {
+  AnikiError,
+  MiddlewareContractError,
+  MiddlewareExecutionError,
+  ValidationError,
+} from "../core/errors.js";
+import { Guard } from "../validation/Guard.js";
 import type { IMiddleware, MiddlewareNext, MiddlewareRequest, MiddlewareResponse } from "./Middleware.js";
+
+const isMiddleware = (entry: unknown): entry is IMiddleware =>
+  entry !== null &&
+  typeof entry === "object" &&
+  typeof (entry as IMiddleware).name === "string" &&
+  (entry as IMiddleware).name.length > 0 &&
+  typeof (entry as IMiddleware).execute === "function";
 
 /**
  * Composes an ordered list of {@link IMiddleware} into a single
@@ -27,13 +40,26 @@ import type { IMiddleware, MiddlewareNext, MiddlewareRequest, MiddlewareResponse
 export class MiddlewarePipeline {
   private readonly middleware: IMiddleware[];
 
-  /** Constructs a pipeline, optionally pre-populated with `middleware`, run in array order. */
+  /** Constructs a pipeline, optionally pre-populated with `middleware`, run in array order. Throws {@link ValidationError} if an entry does not implement {@link IMiddleware}. */
   constructor(middleware: readonly IMiddleware[] = []) {
+    Guard.assertArrayOf<IMiddleware>(
+      middleware,
+      (entry): entry is IMiddleware => isMiddleware(entry),
+      "MiddlewarePipeline.middleware",
+      "Each entry must implement IMiddleware: a non-empty `name` and an `execute(request, next)` method.",
+    );
     this.middleware = [...middleware];
   }
 
-  /** Appends `middleware` to the end of the pipeline. Returns `this` for chaining. */
+  /** Appends `middleware` to the end of the pipeline. Returns `this` for chaining. Throws {@link ValidationError} if it does not implement {@link IMiddleware}. */
   use(middleware: IMiddleware): this {
+    if (!isMiddleware(middleware)) {
+      throw new ValidationError(
+        "MiddlewarePipeline.use(middleware) must implement IMiddleware: a non-empty `name` and an `execute(request, next)` method. " +
+          "Pass an object with a non-empty `name` and an `execute(request, next)` method.",
+        { subject: "MiddlewarePipeline.use(middleware)", received: middleware },
+      );
+    }
     this.middleware.push(middleware);
     return this;
   }

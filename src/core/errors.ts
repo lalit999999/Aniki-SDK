@@ -76,7 +76,7 @@ export abstract class AnikiError extends Error {
   /** A stable, machine-readable identifier for this error's failure mode. */
   abstract readonly code: ErrorCode;
   /** The original error or value this error wraps, when it was caused by one. */
-  readonly cause?: unknown;
+  override readonly cause?: unknown;
   /** Structured fields describing this failure (e.g. `toolName`, `attempts`), for logging without an `instanceof` chain. */
   readonly context: Readonly<Record<string, unknown>>;
 
@@ -439,7 +439,7 @@ export class StreamError extends AnikiError {
 
 /** Thrown when a stream's consumer calls `abort()`, or the caller-supplied `AbortSignal` fires. */
 export class StreamAbortedError extends StreamError {
-  readonly code: ErrorCode = "STREAM_ABORTED";
+  override readonly code: ErrorCode = "STREAM_ABORTED";
   /** The caller-supplied reason for aborting, when given. */
   readonly reason?: string;
 
@@ -454,7 +454,7 @@ export class StreamAbortedError extends StreamError {
 
 /** Thrown when a {@link RunStream} is iterated, or its `result` awaited, more than once. */
 export class StreamConsumedError extends StreamError {
-  readonly code: ErrorCode = "STREAM_ALREADY_CONSUMED";
+  override readonly code: ErrorCode = "STREAM_ALREADY_CONSUMED";
 
   constructor() {
     super("This stream has already been consumed and cannot be read again");
@@ -464,7 +464,7 @@ export class StreamConsumedError extends StreamError {
 
 /** Thrown by {@link Runner.stream} when the agent's provider or configuration cannot support streaming. */
 export class StreamingNotSupportedError extends StreamError {
-  readonly code: ErrorCode = "STREAMING_NOT_SUPPORTED";
+  override readonly code: ErrorCode = "STREAMING_NOT_SUPPORTED";
   /** The name of the provider that could not stream this request. */
   readonly providerName: string;
   /** Why streaming is unavailable for this run. */

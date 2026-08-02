@@ -1,6 +1,7 @@
 import type { ToolCall } from "./tool.js";
 
 export type { ToolCall, ToolDefinition, ToolResult } from "./tool.js";
+export type { RunMetadata, StreamEvent, StructuredParseOutcome } from "./output.js";
 
 /** The speaker a conversation message is attributed to. */
 export type Role = "system" | "user" | "assistant" | "tool";

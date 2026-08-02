@@ -2,6 +2,23 @@ import type { ToolCall } from "./tool.js";
 
 export type { ToolCall, ToolDefinition, ToolResult } from "./tool.js";
 export type { RunMetadata, StreamEvent, StructuredParseOutcome } from "./output.js";
+export type {
+  AgentEndEvent,
+  AgentErrorEvent,
+  AgentStartEvent,
+  AnikiEvents,
+  BaseEventPayload,
+  EventName,
+  LlmEndEvent,
+  LlmErrorEvent,
+  LlmStartEvent,
+  MiddlewareErrorEvent,
+  TimedEventPayload,
+  ToolEndEvent,
+  ToolErrorEvent,
+  ToolStartEvent,
+} from "./events.js";
+export { EVENT_NAMES, LEGACY_EVENT_ALIASES } from "./events.js";
 
 /** The speaker a conversation message is attributed to. */
 export type Role = "system" | "user" | "assistant" | "tool";

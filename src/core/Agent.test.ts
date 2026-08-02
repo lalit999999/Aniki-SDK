@@ -73,7 +73,10 @@ describe("Agent", () => {
   it("stores an optional output schema and tools/middleware arrays", () => {
     const output = z.object({ answer: z.string() });
     const weatherTool = makeTool("get_weather");
-    const middleware: IMiddleware = { name: "NoopMiddleware", execute: async (request, next) => next(request) };
+    const middleware: IMiddleware = {
+      name: "NoopMiddleware",
+      execute: async (request, next) => next(request),
+    };
     const agent = new Agent({
       name: "Assistant",
       instructions: "Be helpful.",

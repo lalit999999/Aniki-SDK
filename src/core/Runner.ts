@@ -37,6 +37,7 @@ import {
   ValidationError,
 } from "./errors.js";
 import { RunStream } from "./RunStream.js";
+import { Guard } from "../validation/Guard.js";
 
 /** Input accepted by {@link Runner.run}. */
 export interface RunInput {
@@ -165,9 +166,22 @@ export class Runner {
     outputPipeline: OutputPipeline = new OutputPipeline(),
     options: RunnerOptions = {},
   ) {
+    const middleware = options.middleware ?? [];
+    Guard.assertArrayOf<IMiddleware>(
+      middleware,
+      (entry): entry is IMiddleware =>
+        entry !== null &&
+        typeof entry === "object" &&
+        typeof (entry as IMiddleware).name === "string" &&
+        (entry as IMiddleware).name.length > 0 &&
+        typeof (entry as IMiddleware).execute === "function",
+      "RunnerOptions.middleware",
+      "Each entry must implement IMiddleware: a non-empty `name` and an `execute(request, next)` method.",
+    );
+
     this.emitter = emitter;
     this.outputPipeline = outputPipeline;
-    this.middleware = options.middleware ?? [];
+    this.middleware = middleware;
     this.logger = options.logger;
   }
 

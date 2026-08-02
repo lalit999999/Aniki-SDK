@@ -54,6 +54,10 @@ describe("JsonExtractor", () => {
       expect(() => extractor.extract('{"name": "Lalit"')).toThrow(OutputParseError);
     });
 
+    it("throws OutputParseError when a closing bracket does not match its opener", () => {
+      expect(() => extractor.extract("{]")).toThrow(OutputParseError);
+    });
+
     it("carries a truncated raw snippet on the thrown error", () => {
       try {
         extractor.extract("no json here");

@@ -49,6 +49,26 @@ describe("Memory", () => {
     expect(() => memory.addMessage({ role: "user", content: "" })).toThrow(ValidationError);
   });
 
+  it("rejects non-string content with ValidationError", () => {
+    const memory = new Memory();
+    expect(() =>
+      memory.addMessage({ role: "user", content: 42 as unknown as string }),
+    ).toThrow(ValidationError);
+  });
+
+  it("attaches subject and received context to a rejected message's ValidationError", () => {
+    const memory = new Memory();
+    try {
+      memory.addMessage({ role: "user", content: 42 as unknown as string });
+      expect.unreachable();
+    } catch (error) {
+      expect(error).toBeInstanceOf(ValidationError);
+      const validationError = error as ValidationError;
+      expect(validationError.context["subject"]).toBe("Memory.addMessage(message).content");
+      expect(validationError.context["received"]).toBe(42);
+    }
+  });
+
   it("does not store a rejected message", () => {
     const memory = new Memory();
     expect(() => memory.addMessage({ role: "user", content: "" })).toThrow();

@@ -66,9 +66,11 @@ export class AnikiSDK {
   configure(options: AnikiConfigOptions): void {
     const result = configSchema.safeParse(options);
     if (!result.success) {
-      throw new ConfigurationError(
-        `Invalid Aniki configuration: ${formatZodIssues(result.error.issues)}`,
-      );
+      const issues = formatZodIssues(result.error.issues);
+      throw new ConfigurationError(`Invalid Aniki configuration: ${issues}`, {
+        subject: "Aniki.configure",
+        issues,
+      });
     }
 
     const merged = omitUndefined<AnikiConfigOptions>({ ...this.config, ...result.data });

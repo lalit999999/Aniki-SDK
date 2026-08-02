@@ -46,6 +46,19 @@ describe("OutputValidator", () => {
         expect((error as OutputValidationError).raw).toBe('{"name":"Lalit"}');
       }
     });
+
+    it("falls back to String(value) when the invalid value cannot be JSON-stringified (e.g. circular)", () => {
+      const validator = new OutputValidator(userSchema);
+      const circular: Record<string, unknown> = { name: "Lalit" };
+      circular["self"] = circular;
+
+      try {
+        validator.validate(circular);
+        expect.unreachable();
+      } catch (error) {
+        expect((error as OutputValidationError).raw).toBe(String(circular));
+      }
+    });
   });
 
   describe("safeValidate", () => {

@@ -116,6 +116,34 @@ describe("LoggingMiddleware happy path", () => {
     expect(logger.calls.every((call) => call.level === "debug")).toBe(true);
   });
 
+  it("writes at level warn", async () => {
+    const logger = fakeLogger();
+    const middleware = new LoggingMiddleware({ logger, level: "warn" });
+    const next: MiddlewareNext = async () => ({
+      response: makeResponse(),
+      fromCache: false,
+      attempts: 1,
+    });
+
+    await middleware.execute(makeRequest(), next);
+
+    expect(logger.calls.every((call) => call.level === "warn")).toBe(true);
+  });
+
+  it("writes at level error", async () => {
+    const logger = fakeLogger();
+    const middleware = new LoggingMiddleware({ logger, level: "error" });
+    const next: MiddlewareNext = async () => ({
+      response: makeResponse(),
+      fromCache: false,
+      attempts: 1,
+    });
+
+    await middleware.execute(makeRequest(), next);
+
+    expect(logger.calls.every((call) => call.level === "error")).toBe(true);
+  });
+
   it("writes nothing at level silent", async () => {
     const logger = fakeLogger();
     const middleware = new LoggingMiddleware({ logger, level: "silent" });

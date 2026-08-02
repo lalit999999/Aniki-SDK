@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
+import { RateLimitError } from "../providers/errors.js";
 import {
   AnikiError,
   CacheError,
   ConfigurationError,
   DuplicateToolError,
+  isAnikiError,
+  isRetryableError,
   MaxToolIterationsError,
   MiddlewareContractError,
   MiddlewareError,
@@ -102,6 +105,14 @@ describe("ToolError hierarchy", () => {
     expect(error.name).toBe("ToolOutputValidationError");
     expect(error.code).toBe("TOOL_OUTPUT_VALIDATION");
     expect(error.issues).toBe("tempC: Required");
+    expect(error.toolCallId).toBeUndefined();
+  });
+
+  it("ToolOutputValidationError carries the tool call id when given", () => {
+    const error = new ToolOutputValidationError("get_weather", "tempC: Required", "call-1");
+
+    expect(error.toolCallId).toBe("call-1");
+    expect(error.context["toolCallId"]).toBe("call-1");
   });
 
   it("ToolExecutionError wraps the original thrown value as cause", () => {
@@ -187,6 +198,13 @@ describe("OutputError hierarchy", () => {
     expect(error.message).toContain("redactor");
     expect(error.message).toContain("boom");
   });
+
+  it("OutputProcessingError stringifies a non-Error cause", () => {
+    const error = new OutputProcessingError("redactor", "raw string failure");
+
+    expect(error.cause).toBe("raw string failure");
+    expect(error.message).toContain("raw string failure");
+  });
 });
 
 describe("StreamError hierarchy", () => {
@@ -252,6 +270,13 @@ describe("MiddlewareError hierarchy", () => {
     expect(error.message).toContain("boom");
   });
 
+  it("MiddlewareExecutionError stringifies a non-Error cause", () => {
+    const error = new MiddlewareExecutionError("RetryMiddleware", "raw string failure");
+
+    expect(error.cause).toBe("raw string failure");
+    expect(error.message).toContain("raw string failure");
+  });
+
   it("MiddlewareContractError names the offending middleware", () => {
     const error = new MiddlewareContractError("CacheMiddleware", "called next() twice");
 
@@ -276,6 +301,13 @@ describe("MiddlewareError hierarchy", () => {
     expect(error.message).toContain("rate limited");
   });
 
+  it("RetryExhaustedError stringifies a non-Error cause", () => {
+    const error = new RetryExhaustedError(3, "raw string failure");
+
+    expect(error.cause).toBe("raw string failure");
+    expect(error.message).toContain("raw string failure");
+  });
+
   it("CacheError carries the failing operation and wraps its cause", () => {
     const cause = new Error("disk full");
     const error = new CacheError("set", cause);
@@ -287,5 +319,178 @@ describe("MiddlewareError hierarchy", () => {
     expect(error.cause).toBe(cause);
     expect(error.message).toContain("set");
     expect(error.message).toContain("disk full");
+  });
+
+  it("CacheError stringifies a non-Error cause", () => {
+    const error = new CacheError("get", "raw string failure");
+
+    expect(error.cause).toBe("raw string failure");
+    expect(error.message).toContain("raw string failure");
+  });
+});
+
+describe("toJSON", () => {
+  const cause = new Error("boom");
+
+  const cases: readonly (readonly [string, AnikiError])[] = [
+    ["ConfigurationError", new ConfigurationError("bad config")],
+    ["ValidationError", new ValidationError("bad input")],
+    ["ProviderError", new ProviderError("provider failed", cause)],
+    ["DuplicateToolError", new DuplicateToolError("get_weather")],
+    ["ToolNotFoundError", new ToolNotFoundError("get_weather", "call-1")],
+    ["ToolInputValidationError", new ToolInputValidationError("get_weather", "city: Required")],
+    ["ToolOutputValidationError", new ToolOutputValidationError("get_weather", "tempC: Required")],
+    ["ToolExecutionError", new ToolExecutionError("get_weather", cause)],
+    ["ToolTimeoutError", new ToolTimeoutError("get_weather", 5000)],
+    ["MaxToolIterationsError", new MaxToolIterationsError(5)],
+    ["OutputParseError", new OutputParseError("no json", "not json", cause)],
+    ["OutputValidationError", new OutputValidationError("email: Required", '{"a":1}')],
+    ["OutputProcessingError", new OutputProcessingError("redactor", cause)],
+    ["StreamError", new StreamError("transport failed", cause)],
+    ["StreamAbortedError", new StreamAbortedError("user cancelled")],
+    ["StreamConsumedError", new StreamConsumedError()],
+    ["StreamingNotSupportedError", new StreamingNotSupportedError("openai", "no streaming")],
+    ["MiddlewareExecutionError", new MiddlewareExecutionError("RetryMiddleware", cause)],
+    ["MiddlewareContractError", new MiddlewareContractError("CacheMiddleware", "called twice")],
+    ["RetryExhaustedError", new RetryExhaustedError(3, cause)],
+    ["CacheError", new CacheError("set", cause)],
+  ];
+
+  it.each(cases)("%s round-trips through toJSON()", (_label, error) => {
+    const json = error.toJSON();
+
+    expect(json.name).toBe(error.name);
+    expect(json.code).toBe(error.code);
+    expect(json.message).toBe(error.message);
+    expect(json.context).toEqual(error.context);
+    expect(json).not.toHaveProperty("stack");
+  });
+
+  it("flattens an Error cause to { name, message }, never a stack", () => {
+    const error = new ProviderError("failed", new TypeError("nope"));
+
+    const json = error.toJSON();
+
+    expect(json.cause).toEqual({ name: "TypeError", message: "nope" });
+    expect(json.cause).not.toHaveProperty("stack");
+  });
+
+  it("flattens a non-Error cause to a synthetic name and stringified message", () => {
+    const error = new ToolExecutionError("get_weather", "raw string failure");
+
+    const json = error.toJSON();
+
+    expect(json.cause).toEqual({ name: "UnknownCause", message: "raw string failure" });
+  });
+
+  it("omits cause entirely when the error was not given one", () => {
+    const error = new ConfigurationError("bad config");
+
+    const json = error.toJSON();
+
+    expect(json.cause).toBeUndefined();
+    expect(json).not.toHaveProperty("cause");
+  });
+
+  it("redacts sensitive context fields, including nested ones", () => {
+    const error = new ProviderError("failed", undefined, {
+      apiKey: "sk-live-123",
+      nested: { authorization: "Bearer xyz", safe: "ok" },
+    });
+
+    const json = error.toJSON();
+
+    expect(json.context["apiKey"]).toBe("[redacted]");
+    expect(json.context["nested"]).toEqual({ authorization: "[redacted]", safe: "ok" });
+  });
+});
+
+describe("context", () => {
+  it("defaults to a frozen empty object when no context is given", () => {
+    const error = new ConfigurationError("bad config");
+
+    expect(error.context).toEqual({});
+    expect(Object.isFrozen(error.context)).toBe(true);
+  });
+
+  it("carries the fields a subclass populates", () => {
+    const error = new ToolTimeoutError("get_weather", 5000, "call-1");
+
+    expect(error.context).toEqual({ toolName: "get_weather", toolCallId: "call-1", timeoutMs: 5000 });
+  });
+});
+
+describe("prototype chain", () => {
+  it("survives being caught as a plain Error", () => {
+    try {
+      throw new ToolNotFoundError("get_weather");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ToolNotFoundError);
+      expect(error).toBeInstanceOf(ToolError);
+      expect(error).toBeInstanceOf(AnikiError);
+      expect(error).toBeInstanceOf(Error);
+    }
+  });
+});
+
+describe("isAnikiError", () => {
+  it.each([
+    ["null", null],
+    ["undefined", undefined],
+    ["a plain Error", new Error("plain")],
+    ["a string", "not an error"],
+    ["a number", 42],
+  ])("returns false for %s", (_label, value) => {
+    expect(isAnikiError(value)).toBe(false);
+    expect(AnikiError.isAnikiError(value)).toBe(false);
+  });
+
+  it.each(
+    [
+      new ConfigurationError("x"),
+      new ValidationError("x"),
+      new ProviderError("x"),
+      new DuplicateToolError("x"),
+      new ToolNotFoundError("x"),
+      new ToolInputValidationError("x", "y"),
+      new ToolOutputValidationError("x", "y"),
+      new ToolExecutionError("x", new Error("y")),
+      new ToolTimeoutError("x", 1),
+      new MaxToolIterationsError(1),
+      new OutputParseError("x", "y"),
+      new OutputValidationError("x", "y"),
+      new OutputProcessingError("x", new Error("y")),
+      new StreamError("x"),
+      new StreamAbortedError(),
+      new StreamConsumedError(),
+      new StreamingNotSupportedError("x", "y"),
+      new MiddlewareExecutionError("x", new Error("y")),
+      new MiddlewareContractError("x", "y"),
+      new RetryExhaustedError(1, new Error("y")),
+      new CacheError("set", new Error("y")),
+    ] as const,
+  )("returns true for $name", (error) => {
+    expect(isAnikiError(error)).toBe(true);
+    expect(AnikiError.isAnikiError(error)).toBe(true);
+  });
+});
+
+describe("isRetryableError", () => {
+  it("returns true for a retryable ProviderResponseError (e.g. RateLimitError)", () => {
+    const error = new RateLimitError("rate limited", "openai");
+
+    expect(isRetryableError(error)).toBe(true);
+  });
+
+  it("returns false for a non-retryable AnikiError", () => {
+    expect(isRetryableError(new ConfigurationError("bad config"))).toBe(false);
+  });
+
+  it.each([
+    ["null", null],
+    ["undefined", undefined],
+    ["a plain Error", new Error("plain")],
+  ])("returns false for %s", (_label, value) => {
+    expect(isRetryableError(value)).toBe(false);
   });
 });

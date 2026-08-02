@@ -7,6 +7,7 @@ import type { IMiddleware } from "../middleware/Middleware.js";
 import type { IProvider } from "../providers/AIProvider.js";
 import { OpenAIProvider } from "../providers/openai/OpenAIProvider.js";
 import { Tool } from "../tools/Tool.js";
+import { MockProvider } from "../testing/MockProvider.js";
 
 function makeTool(name: string): Tool {
   return new Tool({
@@ -18,14 +19,11 @@ function makeTool(name: string): Tool {
 }
 
 function createFakeProvider(): IProvider {
-  return {
+  return new MockProvider({
     name: "fake",
     capabilities: { streaming: false, toolCalling: false, structuredOutput: false },
-    generate: async () => ({ content: "fake response", model: "gpt-5.5" }),
-    generateStream: async function* () {
-      yield { delta: "fake response" };
-    },
-  };
+    responses: [{ content: "fake response", model: "gpt-5.5" }],
+  });
 }
 
 describe("Agent", () => {

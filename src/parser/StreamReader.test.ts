@@ -148,6 +148,22 @@ describe("StreamReader", () => {
     await expect(drain(reader.read())).rejects.toThrow(StreamAbortedError);
   });
 
+  it("propagates a non-abort failure from the source while a signal is configured", async () => {
+    const controller = new AbortController();
+    const source: AsyncIterable<ProviderStreamChunk> = {
+      [Symbol.asyncIterator]() {
+        return {
+          async next(): Promise<IteratorResult<ProviderStreamChunk>> {
+            throw new Error("transport exploded");
+          },
+        };
+      },
+    };
+    const reader = new StreamReader(source, { providerName: "openai", signal: controller.signal });
+
+    await expect(drain(reader.read())).rejects.toThrow(StreamError);
+  });
+
   it("throws StreamAbortedError when the signal fires mid-stream", async () => {
     const controller = new AbortController();
     let returned = false;

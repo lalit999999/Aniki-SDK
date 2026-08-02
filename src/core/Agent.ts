@@ -6,9 +6,8 @@ import type { IProvider } from "../providers/AIProvider.js";
 import { ProviderFactory } from "../providers/ProviderFactory.js";
 import type { Tool } from "../tools/Tool.js";
 import { ToolRegistry } from "../tools/ToolRegistry.js";
-import { ValidationError } from "./errors.js";
 import { InMemorySession, type ISession } from "./Session.js";
-import { formatZodIssues } from "../utils/index.js";
+import { Guard } from "../validation/Guard.js";
 
 const DEFAULT_MAX_TOOL_ITERATIONS = 5;
 
@@ -85,43 +84,47 @@ export class Agent<TOutput = undefined> {
 
   /** Constructs an Agent. Throws {@link ValidationError} if the configuration is invalid. */
   constructor(options: AgentOptions<TOutput>) {
-    const result = agentSchema.safeParse(options);
-    if (!result.success) {
-      throw new ValidationError(
-        `Invalid Agent configuration: ${formatZodIssues(result.error.issues)}`,
-      );
-    }
+    const result = Guard.fromZod(agentSchema.safeParse(options), "Invalid Agent configuration");
     const provider =
       typeof options.provider === "string"
         ? ProviderFactory.create(options.provider)
         : options.provider;
-    if (!provider || typeof provider.generate !== "function") {
-      throw new ValidationError("Invalid Agent configuration: provider must implement IProvider");
-    }
-    if (options.output !== undefined && !(options.output instanceof z.ZodType)) {
-      throw new ValidationError("Invalid Agent configuration: output must be a Zod schema");
+    Guard.assertImplements<IProvider>(
+      provider,
+      "Agent.provider",
+      "IProvider",
+      ["generate"],
+      'Pass a provider instance (e.g. new OpenAIProvider(...)) or a registered provider name such as "openai".',
+    );
+    if (options.output !== undefined) {
+      Guard.assertZodSchema(
+        options.output,
+        "Agent.output",
+        "Pass a Zod schema, e.g. z.object({ ... }).",
+      );
     }
     const middleware = options.middleware ?? [];
-    for (const entry of middleware) {
-      if (
-        !entry ||
-        typeof entry.name !== "string" ||
-        entry.name.length === 0 ||
-        typeof entry.execute !== "function"
-      ) {
-        throw new ValidationError("Invalid Agent configuration: middleware must implement IMiddleware");
-      }
-    }
+    Guard.assertArrayOf<IMiddleware>(
+      middleware,
+      (entry): entry is IMiddleware =>
+        entry !== null &&
+        typeof entry === "object" &&
+        typeof (entry as IMiddleware).name === "string" &&
+        (entry as IMiddleware).name.length > 0 &&
+        typeof (entry as IMiddleware).execute === "function",
+      "Agent.middleware",
+      "Each entry must implement IMiddleware: a non-empty `name` and an `execute(request, next)` method.",
+    );
 
-    this._name = result.data.name;
-    this._instructions = result.data.instructions;
-    this._model = result.data.model;
+    this._name = result.name;
+    this._instructions = result.instructions;
+    this._model = result.model;
     this._provider = provider;
     this._session = options.session ?? new InMemorySession(randomUUID());
     this._output = options.output;
     this._tools = options.tools ?? [];
     this._toolRegistry = new ToolRegistry(this._tools);
-    this._maxToolIterations = result.data.maxToolIterations ?? DEFAULT_MAX_TOOL_ITERATIONS;
+    this._maxToolIterations = result.maxToolIterations ?? DEFAULT_MAX_TOOL_ITERATIONS;
     this._middleware = middleware;
   }
 

@@ -105,5 +105,41 @@ describe("OpenAIResponseParser", () => {
         collect(new OpenAIResponseParser().parseStream(toByteStream(events))),
       ).rejects.toThrow(ProviderResponseError);
     });
+
+    it("throws ProviderResponseError when a stream event is not valid JSON", async () => {
+      const events = ["data: not json at all\n\n"];
+
+      await expect(
+        collect(new OpenAIResponseParser().parseStream(toByteStream(events))),
+      ).rejects.toThrow(ProviderResponseError);
+    });
+
+    it("processes a trailing SSE event with no terminating newline", async () => {
+      const payload = JSON.stringify({
+        id: "chatcmpl-1",
+        model: "gpt-5.5",
+        choices: [{ index: 0, delta: { content: "Hi" }, finish_reason: null }],
+      });
+      // No trailing "\n\n" — this line only surfaces via the post-loop flush.
+      const events = [`data: ${payload}`];
+
+      const chunks = await collect(new OpenAIResponseParser().parseStream(toByteStream(events)));
+
+      expect(chunks).toEqual([{ delta: "Hi" }]);
+    });
+
+    it("skips a stream event whose choices array is empty", async () => {
+      const emptyChoices = JSON.stringify({ id: "chatcmpl-1", model: "gpt-5.5", choices: [] });
+      const finalEvent = JSON.stringify({
+        id: "chatcmpl-1",
+        model: "gpt-5.5",
+        choices: [{ index: 0, delta: { content: "Hi" }, finish_reason: "stop" }],
+      });
+      const events = [`data: ${emptyChoices}\n\ndata: ${finalEvent}\n\n`];
+
+      const chunks = await collect(new OpenAIResponseParser().parseStream(toByteStream(events)));
+
+      expect(chunks).toEqual([{ delta: "Hi", finishReason: "stop" }]);
+    });
   });
 });

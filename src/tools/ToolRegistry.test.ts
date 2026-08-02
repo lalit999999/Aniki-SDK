@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { Tool } from "./Tool.js";
 import { ToolRegistry } from "./ToolRegistry.js";
-import { DuplicateToolError, ToolNotFoundError } from "../core/errors.js";
+import { DuplicateToolError, ToolNotFoundError, ValidationError } from "../core/errors.js";
 
 function makeTool(name: string): Tool {
   return new Tool({
@@ -55,6 +55,19 @@ describe("ToolRegistry", () => {
     registry.registerAll([makeTool("a"), makeTool("b"), makeTool("c")]);
 
     expect([...registry.names()].sort()).toEqual(["a", "b", "c"]);
+  });
+
+  it("register throws ValidationError when given something that is not a Tool instance", () => {
+    const registry = new ToolRegistry();
+
+    expect(() => registry.register({ name: "fake" } as unknown as Tool)).toThrow(ValidationError);
+  });
+
+  it("registerAll throws ValidationError when given null or undefined", () => {
+    const registry = new ToolRegistry();
+
+    expect(() => registry.registerAll(null as unknown as Tool[])).toThrow(ValidationError);
+    expect(() => registry.registerAll(undefined as unknown as Tool[])).toThrow(ValidationError);
   });
 
   it("registerAll rolls back entirely when any entry collides with the registry", () => {

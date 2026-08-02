@@ -1,26 +1,15 @@
 /**
  * Shared, dependency-free helper utilities used across the SDK.
- */
-
-/**
- * Returns a shallow copy of `value` with every key whose value is
- * `undefined` removed.
  *
- * Required to satisfy `exactOptionalPropertyTypes`: spreading a partial
- * object directly into a type with optional properties can otherwise leave
- * keys explicitly set to `undefined`, which that flag rejects.
+ * A pure barrel — each helper lives in its own focused module
+ * (`object.ts`, `zod.ts`, `id.ts`, `string.ts`, `async.ts`) and is
+ * re-exported here so existing imports of `../utils/index.js` keep working
+ * unchanged.
  */
-export function omitUndefined<T extends object>(value: { [K in keyof T]?: T[K] | undefined }): T {
-  const entries = Object.entries(value).filter(([, v]) => v !== undefined);
-  return Object.fromEntries(entries) as T;
-}
 
-/**
- * Formats Zod issues into a single human-readable string, one issue per
- * `"; "`-separated segment, e.g. `"path.to.field: message; (root): message"`.
- */
-export function formatZodIssues(
-  issues: readonly { path: PropertyKey[]; message: string }[],
-): string {
-  return issues.map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`).join("; ");
-}
+export { deepFreeze, isPlainObject, omitUndefined } from "./object.js";
+export { formatZodIssues } from "./zod.js";
+export { generateId } from "./id.js";
+export { truncate } from "./string.js";
+export { sleep, withTimeout } from "./async.js";
+export type { TimeoutResult } from "./async.js";

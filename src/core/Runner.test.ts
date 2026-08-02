@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { Agent } from "./Agent.js";
 import {
@@ -15,24 +15,15 @@ import { Runner } from "./Runner.js";
 import type { MiddlewareNext, MiddlewareRequest } from "../middleware/Middleware.js";
 import { AuthenticationError } from "../providers/errors.js";
 import { Tool } from "../tools/Tool.js";
-import type {
-  IProvider,
-  ProviderCapabilities,
-  ProviderRequest,
-  ProviderResponse,
-  ProviderStreamChunk,
-} from "../providers/AIProvider.js";
+import type { IProvider, ProviderCapabilities, ProviderStreamChunk } from "../providers/AIProvider.js";
 import type { ToolCall } from "../types/index.js";
+import { MockProvider } from "../testing/MockProvider.js";
 
 const FAKE_CAPABILITIES: ProviderCapabilities = {
   streaming: false,
   toolCalling: true,
   structuredOutput: false,
 };
-
-async function* fakeGenerateStream(): AsyncIterable<ProviderStreamChunk> {
-  yield { delta: "" };
-}
 
 function createAgent(provider: IProvider, options: { maxToolIterations?: number } = {}): Agent {
   return new Agent({
@@ -82,17 +73,22 @@ function makeWeatherTool(execute: (input: { city: string }) => Promise<{ tempC: 
   });
 }
 
+describe("Runner constructor validation", () => {
+  it("throws ValidationError when an options.middleware entry does not implement IMiddleware", () => {
+    expect(
+      () => new Runner(undefined, undefined, { middleware: [{ name: "" } as never] }),
+    ).toThrow(ValidationError);
+  });
+
+  it("accepts an empty middleware array (the default)", () => {
+    expect(() => new Runner(undefined, undefined, { middleware: [] })).not.toThrow();
+  });
+});
+
 describe("Runner", () => {
   it("executes a full run against a fake provider and returns a typed result", async () => {
-    const provider: IProvider = {
-      name: "fake",
-      capabilities: FAKE_CAPABILITIES,
-      generate: vi.fn(async (): Promise<ProviderResponse> => ({
-        content: "Hello, Lalit!",
-        model: "gpt-5.5",
-      })),
-      generateStream: fakeGenerateStream,
-    };
+    const provider = new MockProvider({ name: "fake", capabilities: FAKE_CAPABILITIES });
+    provider.enqueueResponse({ content: "Hello, Lalit!", model: "gpt-5.5" });
     const agent = createAgent(provider);
     const runner = new Runner();
 
@@ -116,15 +112,9 @@ describe("Runner", () => {
   });
 
   it("grows conversation history across sequential calls on the same session", async () => {
-    const provider: IProvider = {
-      name: "fake",
-      capabilities: FAKE_CAPABILITIES,
-      generate: vi.fn(async (request: ProviderRequest): Promise<ProviderResponse> => ({
-        content: `turn:${request.messages.length}`,
-        model: "gpt-5.5",
-      })),
-      generateStream: fakeGenerateStream,
-    };
+    const provider = new MockProvider({ name: "fake", capabilities: FAKE_CAPABILITIES });
+    provider.enqueueResponse({ content: "turn:2", model: "gpt-5.5" });
+    provider.enqueueResponse({ content: "turn:4", model: "gpt-5.5" });
     const agent = createAgent(provider);
     const runner = new Runner();
 
@@ -141,23 +131,16 @@ describe("Runner", () => {
     ]);
 
     // The second request must include the first turn's history.
-    const secondRequest = (provider.generate as ReturnType<typeof vi.fn>).mock
-      .calls[1]?.[0] as ProviderRequest;
-    expect(secondRequest.messages).toContainEqual({
+    const secondRequest = provider.calls[1];
+    expect(secondRequest?.messages).toContainEqual({
       role: "user",
       content: "Hi, my name is Lalit.",
     });
   });
 
   it("wraps a throwing provider's error as ProviderError instead of leaking it raw", async () => {
-    const provider: IProvider = {
-      name: "fake",
-      capabilities: FAKE_CAPABILITIES,
-      generate: vi.fn(async () => {
-        throw new Error("network exploded");
-      }),
-      generateStream: fakeGenerateStream,
-    };
+    const provider = new MockProvider({ name: "fake", capabilities: FAKE_CAPABILITIES });
+    provider.enqueueError(new Error("network exploded"));
     const agent = createAgent(provider);
     const runner = new Runner();
 
@@ -165,29 +148,16 @@ describe("Runner", () => {
   });
 
   it("throws ValidationError for an empty message without calling the provider", async () => {
-    const provider: IProvider = {
-      name: "fake",
-      capabilities: FAKE_CAPABILITIES,
-      generate: vi.fn(async (): Promise<ProviderResponse> => ({
-        content: "unused",
-        model: "gpt-5.5",
-      })),
-      generateStream: fakeGenerateStream,
-    };
+    const provider = new MockProvider({ name: "fake", capabilities: FAKE_CAPABILITIES });
     const agent = createAgent(provider);
     const runner = new Runner();
 
     await expect(runner.run(agent, { message: "" })).rejects.toThrow(ValidationError);
-    expect(provider.generate).not.toHaveBeenCalled();
+    expect(provider.callCount).toBe(0);
   });
 
   it("emits lifecycle events in the expected order on the happy path", async () => {
-    const provider: IProvider = {
-      name: "fake",
-      capabilities: FAKE_CAPABILITIES,
-      generate: vi.fn(async (): Promise<ProviderResponse> => ({ content: "hi", model: "gpt-5.5" })),
-      generateStream: fakeGenerateStream,
-    };
+    const provider = new MockProvider({ name: "fake", capabilities: FAKE_CAPABILITIES });
     const agent = createAgent(provider);
     const runner = new Runner();
     const seen: string[] = [];
@@ -203,14 +173,8 @@ describe("Runner", () => {
   });
 
   it("emits an error event before throwing when the provider fails", async () => {
-    const provider: IProvider = {
-      name: "fake",
-      capabilities: FAKE_CAPABILITIES,
-      generate: vi.fn(async () => {
-        throw new Error("boom");
-      }),
-      generateStream: fakeGenerateStream,
-    };
+    const provider = new MockProvider({ name: "fake", capabilities: FAKE_CAPABILITIES });
+    provider.enqueueError(new Error("boom"));
     const agent = createAgent(provider);
     const runner = new Runner();
     const seen: string[] = [];
@@ -228,14 +192,8 @@ describe("Runner", () => {
     const subclassError = new AuthenticationError("invalid api key", "openai", {
       statusCode: 401,
     });
-    const provider: IProvider = {
-      name: "fake",
-      capabilities: FAKE_CAPABILITIES,
-      generate: vi.fn(async () => {
-        throw subclassError;
-      }),
-      generateStream: fakeGenerateStream,
-    };
+    const provider = new MockProvider({ name: "fake", capabilities: FAKE_CAPABILITIES });
+    provider.enqueueError(subclassError);
     const agent = createAgent(provider);
     const runner = new Runner();
     const seenErrors: Error[] = [];
@@ -247,14 +205,9 @@ describe("Runner", () => {
   });
 
   it("wraps a plain, non-ProviderError throw into a fresh ProviderError as before", async () => {
-    const provider: IProvider = {
-      name: "fake",
-      capabilities: FAKE_CAPABILITIES,
-      generate: vi.fn(async () => {
-        throw new Error("plain failure");
-      }),
-      generateStream: fakeGenerateStream,
-    };
+    const provider = new MockProvider({ name: "fake", capabilities: FAKE_CAPABILITIES });
+    provider.enqueueError(new Error("plain failure"));
+    provider.enqueueError(new Error("plain failure"));
     const agent = createAgent(provider);
     const runner = new Runner();
 
@@ -266,59 +219,31 @@ describe("Runner", () => {
 
   describe("tool calling", () => {
     it("adds no tools key to the request when the agent has none", async () => {
-      const provider: IProvider = {
-        name: "fake",
-        capabilities: FAKE_CAPABILITIES,
-        generate: vi.fn(async (): Promise<ProviderResponse> => ({
-          content: "hi",
-          model: "gpt-5.5",
-        })),
-        generateStream: fakeGenerateStream,
-      };
+      const provider = new MockProvider({ name: "fake", capabilities: FAKE_CAPABILITIES });
       const agent = createAgent(provider);
       const runner = new Runner();
 
       await runner.run(agent, { message: "Hi" });
 
-      const request = (provider.generate as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as
-        ProviderRequest | undefined;
-      expect(request?.tools).toBeUndefined();
+      expect(provider.calls[0]?.tools).toBeUndefined();
     });
 
     it("includes tool definitions in the request when the agent has tools", async () => {
       const tool = makeWeatherTool(async () => ({ tempC: 21 }));
-      const provider: IProvider = {
-        name: "fake",
-        capabilities: FAKE_CAPABILITIES,
-        generate: vi.fn(async (): Promise<ProviderResponse> => ({
-          content: "hi",
-          model: "gpt-5.5",
-        })),
-        generateStream: fakeGenerateStream,
-      };
+      const provider = new MockProvider({ name: "fake", capabilities: FAKE_CAPABILITIES });
       const agent = createAgentWithTools(provider, [tool]);
       const runner = new Runner();
 
       await runner.run(agent, { message: "Hi" });
 
-      const request = (provider.generate as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as
-        ProviderRequest | undefined;
-      expect(request?.tools).toEqual([tool.toDefinition()]);
+      expect(provider.calls[0]?.tools).toEqual([tool.toDefinition()]);
     });
 
     it("executes a single requested tool call and returns the model's final answer", async () => {
       const tool = makeWeatherTool(async ({ city }) => ({ tempC: city.length }));
-      const call: ToolCall = { id: "call-1", name: "get_weather", arguments: { city: "Gaya" } };
-      const generate = vi
-        .fn<(request: ProviderRequest) => Promise<ProviderResponse>>()
-        .mockResolvedValueOnce({ content: "", model: "gpt-5.5", toolCalls: [call] })
-        .mockResolvedValueOnce({ content: "It's 4°C in Gaya.", model: "gpt-5.5" });
-      const provider: IProvider = {
-        name: "fake",
-        capabilities: FAKE_CAPABILITIES,
-        generate,
-        generateStream: fakeGenerateStream,
-      };
+      const provider = new MockProvider({ name: "fake", capabilities: FAKE_CAPABILITIES });
+      provider.enqueueToolCall("get_weather", { city: "Gaya" }, "call-1");
+      provider.enqueueResponse({ content: "It's 4°C in Gaya.", model: "gpt-5.5" });
       const agent = createAgentWithTools(provider, [tool]);
       const runner = new Runner();
 
@@ -335,7 +260,7 @@ describe("Runner", () => {
           durationMs: expect.any(Number),
         },
       ]);
-      expect(generate).toHaveBeenCalledTimes(2);
+      expect(provider.callCount).toBe(2);
     });
 
     it("handles two tool calls in a single response", async () => {
@@ -344,16 +269,9 @@ describe("Runner", () => {
         { id: "call-1", name: "get_weather", arguments: { city: "Gaya" } },
         { id: "call-2", name: "get_weather", arguments: { city: "Patna" } },
       ];
-      const generate = vi
-        .fn<(request: ProviderRequest) => Promise<ProviderResponse>>()
-        .mockResolvedValueOnce({ content: "", model: "gpt-5.5", toolCalls: calls })
-        .mockResolvedValueOnce({ content: "Both checked.", model: "gpt-5.5" });
-      const provider: IProvider = {
-        name: "fake",
-        capabilities: FAKE_CAPABILITIES,
-        generate,
-        generateStream: fakeGenerateStream,
-      };
+      const provider = new MockProvider({ name: "fake", capabilities: FAKE_CAPABILITIES });
+      provider.enqueueResponse({ content: "", model: "gpt-5.5", toolCalls: calls });
+      provider.enqueueResponse({ content: "Both checked.", model: "gpt-5.5" });
       const agent = createAgentWithTools(provider, [tool]);
       const runner = new Runner();
 
@@ -367,25 +285,18 @@ describe("Runner", () => {
 
     it("runs two sequential tool-calling iterations before the final answer", async () => {
       const tool = makeWeatherTool(async ({ city }) => ({ tempC: city.length }));
-      const generate = vi
-        .fn<(request: ProviderRequest) => Promise<ProviderResponse>>()
-        .mockResolvedValueOnce({
-          content: "",
-          model: "gpt-5.5",
-          toolCalls: [{ id: "call-1", name: "get_weather", arguments: { city: "Gaya" } }],
-        })
-        .mockResolvedValueOnce({
-          content: "",
-          model: "gpt-5.5",
-          toolCalls: [{ id: "call-2", name: "get_weather", arguments: { city: "Patna" } }],
-        })
-        .mockResolvedValueOnce({ content: "Done.", model: "gpt-5.5" });
-      const provider: IProvider = {
-        name: "fake",
-        capabilities: FAKE_CAPABILITIES,
-        generate,
-        generateStream: fakeGenerateStream,
-      };
+      const provider = new MockProvider({ name: "fake", capabilities: FAKE_CAPABILITIES });
+      provider.enqueueResponse({
+        content: "",
+        model: "gpt-5.5",
+        toolCalls: [{ id: "call-1", name: "get_weather", arguments: { city: "Gaya" } }],
+      });
+      provider.enqueueResponse({
+        content: "",
+        model: "gpt-5.5",
+        toolCalls: [{ id: "call-2", name: "get_weather", arguments: { city: "Patna" } }],
+      });
+      provider.enqueueResponse({ content: "Done.", model: "gpt-5.5" });
       const agent = createAgentWithTools(provider, [tool]);
       const runner = new Runner();
 
@@ -394,7 +305,7 @@ describe("Runner", () => {
       expect(result.content).toBe("Done.");
       expect(result.iterations).toBe(3);
       expect(result.toolResults).toHaveLength(2);
-      expect(generate).toHaveBeenCalledTimes(3);
+      expect(provider.callCount).toBe(3);
     });
 
     it("feeds a failing tool's error back to the model, which recovers on the next iteration", async () => {
@@ -402,19 +313,12 @@ describe("Runner", () => {
         throw new Error("service unavailable");
       });
       const call: ToolCall = { id: "call-1", name: "get_weather", arguments: { city: "Gaya" } };
-      const generate = vi
-        .fn<(request: ProviderRequest) => Promise<ProviderResponse>>()
-        .mockResolvedValueOnce({ content: "", model: "gpt-5.5", toolCalls: [call] })
-        .mockResolvedValueOnce({
-          content: "The weather service is unavailable.",
-          model: "gpt-5.5",
-        });
-      const provider: IProvider = {
-        name: "fake",
-        capabilities: FAKE_CAPABILITIES,
-        generate,
-        generateStream: fakeGenerateStream,
-      };
+      const provider = new MockProvider({ name: "fake", capabilities: FAKE_CAPABILITIES });
+      provider.enqueueResponse({ content: "", model: "gpt-5.5", toolCalls: [call] });
+      provider.enqueueResponse({
+        content: "The weather service is unavailable.",
+        model: "gpt-5.5",
+      });
       const agent = createAgentWithTools(provider, [tool]);
       const runner = new Runner();
 
@@ -428,7 +332,7 @@ describe("Runner", () => {
         }),
       ]);
 
-      const secondRequest = generate.mock.calls[1]?.[0];
+      const secondRequest = provider.calls[1];
       expect(secondRequest?.messages).toContainEqual(
         expect.objectContaining({ role: "tool", toolCallId: "call-1" }),
       );
@@ -436,39 +340,24 @@ describe("Runner", () => {
 
     it("throws MaxToolIterationsError when the provider keeps requesting tools forever", async () => {
       const tool = makeWeatherTool(async () => ({ tempC: 1 }));
-      const call: ToolCall = { id: "call-1", name: "get_weather", arguments: { city: "Gaya" } };
-      const provider: IProvider = {
-        name: "fake",
-        capabilities: FAKE_CAPABILITIES,
-        generate: vi.fn(async (): Promise<ProviderResponse> => ({
-          content: "",
-          model: "gpt-5.5",
-          toolCalls: [call],
-        })),
-        generateStream: fakeGenerateStream,
-      };
+      const provider = new MockProvider({ name: "fake", capabilities: FAKE_CAPABILITIES });
+      provider.enqueueToolCall("get_weather", { city: "Gaya" }, "call-1");
+      provider.enqueueToolCall("get_weather", { city: "Gaya" }, "call-1");
       const agent = createAgentWithTools(provider, [tool], { maxToolIterations: 2 });
       const runner = new Runner();
 
       await expect(runner.run(agent, { message: "Loop forever" })).rejects.toThrow(
         MaxToolIterationsError,
       );
-      expect(provider.generate).toHaveBeenCalledTimes(2);
+      expect(provider.callCount).toBe(2);
     });
 
     it("persists the exact session history and ordering across a tool round trip", async () => {
       const tool = makeWeatherTool(async ({ city }) => ({ tempC: city.length }));
       const call: ToolCall = { id: "call-1", name: "get_weather", arguments: { city: "Gaya" } };
-      const generate = vi
-        .fn<(request: ProviderRequest) => Promise<ProviderResponse>>()
-        .mockResolvedValueOnce({ content: "", model: "gpt-5.5", toolCalls: [call] })
-        .mockResolvedValueOnce({ content: "It's 4°C in Gaya.", model: "gpt-5.5" });
-      const provider: IProvider = {
-        name: "fake",
-        capabilities: FAKE_CAPABILITIES,
-        generate,
-        generateStream: fakeGenerateStream,
-      };
+      const provider = new MockProvider({ name: "fake", capabilities: FAKE_CAPABILITIES });
+      provider.enqueueResponse({ content: "", model: "gpt-5.5", toolCalls: [call] });
+      provider.enqueueResponse({ content: "It's 4°C in Gaya.", model: "gpt-5.5" });
       const agent = createAgentWithTools(provider, [tool]);
       const runner = new Runner();
 
@@ -490,16 +379,9 @@ describe("Runner", () => {
     it("emits tool:started and tool:finished around a successful tool call", async () => {
       const tool = makeWeatherTool(async () => ({ tempC: 21 }));
       const call: ToolCall = { id: "call-1", name: "get_weather", arguments: { city: "Gaya" } };
-      const generate = vi
-        .fn<(request: ProviderRequest) => Promise<ProviderResponse>>()
-        .mockResolvedValueOnce({ content: "", model: "gpt-5.5", toolCalls: [call] })
-        .mockResolvedValueOnce({ content: "Done.", model: "gpt-5.5" });
-      const provider: IProvider = {
-        name: "fake",
-        capabilities: FAKE_CAPABILITIES,
-        generate,
-        generateStream: fakeGenerateStream,
-      };
+      const provider = new MockProvider({ name: "fake", capabilities: FAKE_CAPABILITIES });
+      provider.enqueueResponse({ content: "", model: "gpt-5.5", toolCalls: [call] });
+      provider.enqueueResponse({ content: "Done.", model: "gpt-5.5" });
       const agent = createAgentWithTools(provider, [tool]);
       const runner = new Runner();
       const seen: string[] = [];
@@ -530,16 +412,9 @@ describe("Runner", () => {
         throw new Error("nope");
       });
       const call: ToolCall = { id: "call-1", name: "get_weather", arguments: { city: "Gaya" } };
-      const generate = vi
-        .fn<(request: ProviderRequest) => Promise<ProviderResponse>>()
-        .mockResolvedValueOnce({ content: "", model: "gpt-5.5", toolCalls: [call] })
-        .mockResolvedValueOnce({ content: "Failed.", model: "gpt-5.5" });
-      const provider: IProvider = {
-        name: "fake",
-        capabilities: FAKE_CAPABILITIES,
-        generate,
-        generateStream: fakeGenerateStream,
-      };
+      const provider = new MockProvider({ name: "fake", capabilities: FAKE_CAPABILITIES });
+      provider.enqueueResponse({ content: "", model: "gpt-5.5", toolCalls: [call] });
+      provider.enqueueResponse({ content: "Failed.", model: "gpt-5.5" });
       const agent = createAgentWithTools(provider, [tool]);
       const runner = new Runner();
       const errors: Error[] = [];
@@ -560,12 +435,7 @@ describe("Runner", () => {
 
   describe("canonical lifecycle events", () => {
     it("emits each canonical event immediately before its legacy counterpart", async () => {
-      const provider: IProvider = {
-        name: "fake",
-        capabilities: FAKE_CAPABILITIES,
-        generate: vi.fn(async (): Promise<ProviderResponse> => ({ content: "hi", model: "gpt-5.5" })),
-        generateStream: fakeGenerateStream,
-      };
+      const provider = new MockProvider({ name: "fake", capabilities: FAKE_CAPABILITIES });
       const agent = createAgent(provider);
       const runner = new Runner();
       const seen: string[] = [];
@@ -598,12 +468,7 @@ describe("Runner", () => {
     });
 
     it("agent:start and agent:end carry runId, agentName, model, and providerName", async () => {
-      const provider: IProvider = {
-        name: "fake",
-        capabilities: FAKE_CAPABILITIES,
-        generate: vi.fn(async (): Promise<ProviderResponse> => ({ content: "hi", model: "gpt-5.5" })),
-        generateStream: fakeGenerateStream,
-      };
+      const provider = new MockProvider({ name: "fake", capabilities: FAKE_CAPABILITIES });
       const agent = createAgent(provider);
       const runner = new Runner();
 
@@ -629,17 +494,13 @@ describe("Runner", () => {
     });
 
     it("llm:end carries durationMs, finishReason, and usage", async () => {
-      const provider: IProvider = {
-        name: "fake",
-        capabilities: FAKE_CAPABILITIES,
-        generate: vi.fn(async (): Promise<ProviderResponse> => ({
-          content: "hi",
-          model: "gpt-5.5",
-          finishReason: "stop",
-          usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
-        })),
-        generateStream: fakeGenerateStream,
-      };
+      const provider = new MockProvider({ name: "fake", capabilities: FAKE_CAPABILITIES });
+      provider.enqueueResponse({
+        content: "hi",
+        model: "gpt-5.5",
+        finishReason: "stop",
+        usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
+      });
       const agent = createAgent(provider);
       const runner = new Runner();
       let llmEnd: { durationMs: number; finishReason?: string; usage?: unknown } | undefined;
@@ -655,14 +516,8 @@ describe("Runner", () => {
     });
 
     it("emits llm:error before the legacy error event when the provider fails", async () => {
-      const provider: IProvider = {
-        name: "fake",
-        capabilities: FAKE_CAPABILITIES,
-        generate: vi.fn(async () => {
-          throw new Error("boom");
-        }),
-        generateStream: fakeGenerateStream,
-      };
+      const provider = new MockProvider({ name: "fake", capabilities: FAKE_CAPABILITIES });
+      provider.enqueueError(new Error("boom"));
       const agent = createAgent(provider);
       const runner = new Runner();
       const seen: string[] = [];
@@ -675,17 +530,8 @@ describe("Runner", () => {
 
     it("emits agent:error before the legacy error event when max tool iterations is exceeded", async () => {
       const tool = makeWeatherTool(async () => ({ tempC: 1 }));
-      const call: ToolCall = { id: "call-1", name: "get_weather", arguments: { city: "Gaya" } };
-      const provider: IProvider = {
-        name: "fake",
-        capabilities: FAKE_CAPABILITIES,
-        generate: vi.fn(async (): Promise<ProviderResponse> => ({
-          content: "",
-          model: "gpt-5.5",
-          toolCalls: [call],
-        })),
-        generateStream: fakeGenerateStream,
-      };
+      const provider = new MockProvider({ name: "fake", capabilities: FAKE_CAPABILITIES });
+      provider.enqueueToolCall("get_weather", { city: "Gaya" }, "call-1");
       const agent = createAgentWithTools(provider, [tool], { maxToolIterations: 1 });
       const runner = new Runner();
       const seen: string[] = [];
@@ -701,16 +547,9 @@ describe("Runner", () => {
     it("emits tool:start/tool:end alongside the legacy tool events for a successful call", async () => {
       const tool = makeWeatherTool(async () => ({ tempC: 21 }));
       const call: ToolCall = { id: "call-1", name: "get_weather", arguments: { city: "Gaya" } };
-      const generate = vi
-        .fn<(request: ProviderRequest) => Promise<ProviderResponse>>()
-        .mockResolvedValueOnce({ content: "", model: "gpt-5.5", toolCalls: [call] })
-        .mockResolvedValueOnce({ content: "Done.", model: "gpt-5.5" });
-      const provider: IProvider = {
-        name: "fake",
-        capabilities: FAKE_CAPABILITIES,
-        generate,
-        generateStream: fakeGenerateStream,
-      };
+      const provider = new MockProvider({ name: "fake", capabilities: FAKE_CAPABILITIES });
+      provider.enqueueResponse({ content: "", model: "gpt-5.5", toolCalls: [call] });
+      provider.enqueueResponse({ content: "Done.", model: "gpt-5.5" });
       const agent = createAgentWithTools(provider, [tool]);
       const runner = new Runner();
       const seen: string[] = [];
@@ -734,12 +573,7 @@ describe("Runner", () => {
 
   describe("Runner.off and Runner.once", () => {
     it("off() unsubscribes a listener registered via on()", async () => {
-      const provider: IProvider = {
-        name: "fake",
-        capabilities: FAKE_CAPABILITIES,
-        generate: vi.fn(async (): Promise<ProviderResponse> => ({ content: "hi", model: "gpt-5.5" })),
-        generateStream: fakeGenerateStream,
-      };
+      const provider = new MockProvider({ name: "fake", capabilities: FAKE_CAPABILITIES });
       const agent = createAgent(provider);
       const runner = new Runner();
       let calls = 0;
@@ -755,12 +589,7 @@ describe("Runner", () => {
     });
 
     it("once() fires exactly one time even across multiple runs", async () => {
-      const provider: IProvider = {
-        name: "fake",
-        capabilities: FAKE_CAPABILITIES,
-        generate: vi.fn(async (): Promise<ProviderResponse> => ({ content: "hi", model: "gpt-5.5" })),
-        generateStream: fakeGenerateStream,
-      };
+      const provider = new MockProvider({ name: "fake", capabilities: FAKE_CAPABILITIES });
       const agent = createAgent(provider);
       const runner = new Runner();
       let calls = 0;
@@ -777,35 +606,23 @@ describe("Runner", () => {
 
   describe("middleware pipeline wiring", () => {
     it("behaves identically to no middleware configured when none is given", async () => {
-      const provider: IProvider = {
-        name: "fake",
-        capabilities: FAKE_CAPABILITIES,
-        generate: vi.fn(async (): Promise<ProviderResponse> => ({ content: "hi", model: "gpt-5.5" })),
-        generateStream: fakeGenerateStream,
-      };
+      const provider = new MockProvider({ name: "fake", capabilities: FAKE_CAPABILITIES });
+      provider.enqueueResponse({ content: "hi", model: "gpt-5.5" });
       const agent = createAgent(provider);
       const runner = new Runner();
 
       const result = await runner.run(agent, { message: "Hi" });
 
       expect(result.content).toBe("hi");
-      expect(provider.generate).toHaveBeenCalledTimes(1);
+      expect(provider.callCount).toBe(1);
     });
 
     it("runs Runner-level middleware before Agent-level middleware", async () => {
-      const provider: IProvider = {
-        name: "fake",
-        capabilities: FAKE_CAPABILITIES,
-        generate: vi.fn(async (): Promise<ProviderResponse> => ({ content: "hi", model: "gpt-5.5" })),
-        generateStream: fakeGenerateStream,
-      };
+      const provider = new MockProvider({ name: "fake", capabilities: FAKE_CAPABILITIES });
       const order: string[] = [];
       const runnerMiddleware = {
         name: "RunnerLevel",
-        execute: async (
-          request: MiddlewareRequest,
-          next: MiddlewareNext,
-        ) => {
+        execute: async (request: MiddlewareRequest, next: MiddlewareNext) => {
           order.push("runner-level:before");
           const result = await next(request);
           order.push("runner-level:after");
@@ -814,10 +631,7 @@ describe("Runner", () => {
       };
       const agentMiddleware = {
         name: "AgentLevel",
-        execute: async (
-          request: MiddlewareRequest,
-          next: MiddlewareNext,
-        ) => {
+        execute: async (request: MiddlewareRequest, next: MiddlewareNext) => {
           order.push("agent-level:before");
           const result = await next(request);
           order.push("agent-level:after");
@@ -844,20 +658,11 @@ describe("Runner", () => {
     });
 
     it("preserves ProviderError wrapping when middleware is configured", async () => {
-      const provider: IProvider = {
-        name: "fake",
-        capabilities: FAKE_CAPABILITIES,
-        generate: vi.fn(async () => {
-          throw new Error("network exploded");
-        }),
-        generateStream: fakeGenerateStream,
-      };
+      const provider = new MockProvider({ name: "fake", capabilities: FAKE_CAPABILITIES });
+      provider.enqueueError(new Error("network exploded"));
       const passthrough = {
         name: "Passthrough",
-        execute: async (
-          request: MiddlewareRequest,
-          next: MiddlewareNext,
-        ) => next(request),
+        execute: async (request: MiddlewareRequest, next: MiddlewareNext) => next(request),
       };
       const agent = new Agent({
         name: "Assistant",
@@ -872,12 +677,7 @@ describe("Runner", () => {
     });
 
     it("emits middleware:error and the legacy error event, then propagates, when a middleware throws", async () => {
-      const provider: IProvider = {
-        name: "fake",
-        capabilities: FAKE_CAPABILITIES,
-        generate: vi.fn(async (): Promise<ProviderResponse> => ({ content: "hi", model: "gpt-5.5" })),
-        generateStream: fakeGenerateStream,
-      };
+      const provider = new MockProvider({ name: "fake", capabilities: FAKE_CAPABILITIES });
       const broken = {
         name: "BrokenMiddleware",
         execute: async () => {
@@ -901,10 +701,12 @@ describe("Runner", () => {
       });
       runner.on("error", () => seen.push("error"));
 
-      await expect(runner.run(agent, { message: "Hi" })).rejects.toBeInstanceOf(MiddlewareExecutionError);
+      await expect(runner.run(agent, { message: "Hi" })).rejects.toBeInstanceOf(
+        MiddlewareExecutionError,
+      );
       expect(seen).toEqual(["middleware:error", "error"]);
       expect(middlewareErrorEvent?.middlewareName).toBe("BrokenMiddleware");
-      expect(provider.generate).not.toHaveBeenCalled();
+      expect(provider.callCount).toBe(0);
     });
   });
 
@@ -912,22 +714,14 @@ describe("Runner", () => {
     const userSchema = z.object({ name: z.string(), age: z.number() });
 
     it("appends format instructions to, and never replaces, the system message", async () => {
-      const generate = vi
-        .fn<(request: ProviderRequest) => Promise<ProviderResponse>>()
-        .mockResolvedValue({ content: '{"name":"Lalit","age":30}', model: "gpt-5.5" });
-      const provider: IProvider = {
-        name: "fake",
-        capabilities: FAKE_CAPABILITIES,
-        generate,
-        generateStream: fakeGenerateStream,
-      };
+      const provider = new MockProvider({ name: "fake", capabilities: FAKE_CAPABILITIES });
+      provider.enqueueResponse({ content: '{"name":"Lalit","age":30}', model: "gpt-5.5" });
       const agent = createAgentWithOutput(provider, userSchema);
       const runner = new Runner();
 
       await runner.run(agent, { message: "Extract the user" });
 
-      const request = generate.mock.calls[0]?.[0] as ProviderRequest;
-      const systemMessage = request.messages[0];
+      const systemMessage = provider.calls[0]?.messages[0];
       expect(systemMessage?.role).toBe("system");
       expect(systemMessage?.content).toContain(agent.instructions);
       expect(systemMessage?.content).toContain("JSON");
@@ -935,34 +729,25 @@ describe("Runner", () => {
     });
 
     it("does not alter the system message when the agent has no output schema", async () => {
-      const generate = vi
-        .fn<(request: ProviderRequest) => Promise<ProviderResponse>>()
-        .mockResolvedValue({ content: "hi", model: "gpt-5.5" });
-      const provider: IProvider = {
-        name: "fake",
-        capabilities: FAKE_CAPABILITIES,
-        generate,
-        generateStream: fakeGenerateStream,
-      };
+      const provider = new MockProvider({ name: "fake", capabilities: FAKE_CAPABILITIES });
+      provider.enqueueResponse({ content: "hi", model: "gpt-5.5" });
       const agent = createAgent(provider);
       const runner = new Runner();
 
       await runner.run(agent, { message: "Hi" });
 
-      const request = generate.mock.calls[0]?.[0] as ProviderRequest;
-      expect(request.messages[0]).toEqual({ role: "system", content: agent.instructions });
+      expect(provider.calls[0]?.messages[0]).toEqual({
+        role: "system",
+        content: agent.instructions,
+      });
     });
 
     it("parses and validates the final response into result.output", async () => {
-      const provider: IProvider = {
-        name: "fake",
-        capabilities: FAKE_CAPABILITIES,
-        generate: vi.fn(async (): Promise<ProviderResponse> => ({
-          content: 'Sure:\n```json\n{"name":"Lalit","age":30}\n```',
-          model: "gpt-5.5",
-        })),
-        generateStream: fakeGenerateStream,
-      };
+      const provider = new MockProvider({ name: "fake", capabilities: FAKE_CAPABILITIES });
+      provider.enqueueResponse({
+        content: 'Sure:\n```json\n{"name":"Lalit","age":30}\n```',
+        model: "gpt-5.5",
+      });
       const agent = createAgentWithOutput(provider, userSchema);
       const runner = new Runner();
 
@@ -973,15 +758,8 @@ describe("Runner", () => {
     });
 
     it("throws OutputParseError when the response has no JSON payload, after persisting the assistant message", async () => {
-      const provider: IProvider = {
-        name: "fake",
-        capabilities: FAKE_CAPABILITIES,
-        generate: vi.fn(async (): Promise<ProviderResponse> => ({
-          content: "Sorry, I can't help with that.",
-          model: "gpt-5.5",
-        })),
-        generateStream: fakeGenerateStream,
-      };
+      const provider = new MockProvider({ name: "fake", capabilities: FAKE_CAPABILITIES });
+      provider.enqueueResponse({ content: "Sorry, I can't help with that.", model: "gpt-5.5" });
       const agent = createAgentWithOutput(provider, userSchema);
       const runner = new Runner();
 
@@ -995,15 +773,8 @@ describe("Runner", () => {
     });
 
     it("throws OutputValidationError when the parsed JSON fails the schema", async () => {
-      const provider: IProvider = {
-        name: "fake",
-        capabilities: FAKE_CAPABILITIES,
-        generate: vi.fn(async (): Promise<ProviderResponse> => ({
-          content: '{"name":"Lalit"}',
-          model: "gpt-5.5",
-        })),
-        generateStream: fakeGenerateStream,
-      };
+      const provider = new MockProvider({ name: "fake", capabilities: FAKE_CAPABILITIES });
+      provider.enqueueResponse({ content: '{"name":"Lalit"}', model: "gpt-5.5" });
       const agent = createAgentWithOutput(provider, userSchema);
       const runner = new Runner();
 
@@ -1013,15 +784,8 @@ describe("Runner", () => {
     });
 
     it("emits an error event before throwing on invalid structured output", async () => {
-      const provider: IProvider = {
-        name: "fake",
-        capabilities: FAKE_CAPABILITIES,
-        generate: vi.fn(async (): Promise<ProviderResponse> => ({
-          content: "not json",
-          model: "gpt-5.5",
-        })),
-        generateStream: fakeGenerateStream,
-      };
+      const provider = new MockProvider({ name: "fake", capabilities: FAKE_CAPABILITIES });
+      provider.enqueueResponse({ content: "not json", model: "gpt-5.5" });
       const agent = createAgentWithOutput(provider, userSchema);
       const runner = new Runner();
       const seen: string[] = [];
@@ -1035,17 +799,13 @@ describe("Runner", () => {
     });
 
     it("populates metadata with finishReason and usage from the final response", async () => {
-      const provider: IProvider = {
-        name: "fake",
-        capabilities: FAKE_CAPABILITIES,
-        generate: vi.fn(async (): Promise<ProviderResponse> => ({
-          content: '{"name":"Lalit","age":30}',
-          model: "gpt-5.5",
-          finishReason: "stop",
-          usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
-        })),
-        generateStream: fakeGenerateStream,
-      };
+      const provider = new MockProvider({ name: "fake", capabilities: FAKE_CAPABILITIES });
+      provider.enqueueResponse({
+        content: '{"name":"Lalit","age":30}',
+        model: "gpt-5.5",
+        finishReason: "stop",
+        usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+      });
       const agent = createAgentWithOutput(provider, userSchema);
       const runner = new Runner();
 
@@ -1071,31 +831,18 @@ describe("Runner", () => {
       structuredOutput: false,
     };
 
-    function createStreamingProvider(chunks: readonly ProviderStreamChunk[]): IProvider {
-      return {
-        name: "fake",
-        capabilities: STREAMING_CAPABILITIES,
-        generate: vi.fn(async (): Promise<ProviderResponse> => ({
-          content: "unused",
-          model: "gpt-5.5",
-        })),
-        generateStream: vi.fn(async function* (): AsyncIterable<ProviderStreamChunk> {
-          for (const chunk of chunks) {
-            yield chunk;
-          }
-        }),
-      };
+    function createStreamingProvider(deltas: readonly string[]): MockProvider {
+      const provider = new MockProvider({ name: "fake", capabilities: STREAMING_CAPABILITIES });
+      provider.enqueueStream(deltas);
+      return provider;
     }
 
     function createNeverStreamingProvider(): IProvider {
       return {
         name: "fake",
         capabilities: STREAMING_CAPABILITIES,
-        generate: vi.fn(async (): Promise<ProviderResponse> => ({
-          content: "unused",
-          model: "gpt-5.5",
-        })),
-        generateStream: () => ({
+        generate: async () => ({ content: "unused", model: "gpt-5.5" }),
+        generateStream: (): AsyncIterable<ProviderStreamChunk> => ({
           [Symbol.asyncIterator]() {
             return { next: () => new Promise<IteratorResult<ProviderStreamChunk>>(() => {}) };
           },
@@ -1104,19 +851,16 @@ describe("Runner", () => {
     }
 
     it("throws ValidationError for an empty message without opening a stream", () => {
-      const provider = createStreamingProvider([{ delta: "hi" }]);
+      const provider = createStreamingProvider(["hi"]);
       const agent = createAgent(provider);
       const runner = new Runner();
 
       expect(() => runner.stream(agent, { message: "" })).toThrow(ValidationError);
-      expect(provider.generateStream).not.toHaveBeenCalled();
+      expect(provider.callCount).toBe(0);
     });
 
     it("throws StreamingNotSupportedError when the provider does not support streaming", () => {
-      const provider: IProvider = {
-        ...createStreamingProvider([]),
-        capabilities: FAKE_CAPABILITIES,
-      };
+      const provider = new MockProvider({ name: "fake", capabilities: FAKE_CAPABILITIES });
       const agent = createAgent(provider);
       const runner = new Runner();
 
@@ -1124,7 +868,7 @@ describe("Runner", () => {
     });
 
     it("throws StreamingNotSupportedError when the agent has registered tools", () => {
-      const provider = createStreamingProvider([{ delta: "hi" }]);
+      const provider = createStreamingProvider(["hi"]);
       const tool = makeWeatherTool(async () => ({ tempC: 1 }));
       const agent = createAgentWithTools(provider, [tool]);
       const runner = new Runner();
@@ -1133,7 +877,7 @@ describe("Runner", () => {
     });
 
     it("persists the user message before opening the stream", () => {
-      const provider = createStreamingProvider([{ delta: "hi" }]);
+      const provider = createStreamingProvider(["hi"]);
       const agent = createAgent(provider);
       const runner = new Runner();
 
@@ -1143,22 +887,21 @@ describe("Runner", () => {
     });
 
     it("appends format instructions to the system message when the agent has an output schema", () => {
-      const provider = createStreamingProvider([{ delta: '{"name":"Lalit"}' }]);
+      const provider = createStreamingProvider(['{"name":"Lalit"}']);
       const schema = z.object({ name: z.string() });
       const agent = createAgentWithOutput(provider, schema);
       const runner = new Runner();
 
       runner.stream(agent, { message: "Extract the user" });
 
-      const request = (provider.generateStream as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as
-        ProviderRequest | undefined;
+      const request = provider.calls[0];
       expect(request?.messages[0]).toEqual(expect.objectContaining({ role: "system" }));
       expect(request?.messages[0]?.content).toContain(agent.instructions);
       expect(request?.messages[0]?.content).toContain("JSON");
     });
 
     it("resolves result with the streamed content and typed output", async () => {
-      const provider = createStreamingProvider([{ delta: "Hello" }, { delta: "!" }]);
+      const provider = createStreamingProvider(["Hello", "!"]);
       const agent = createAgent(provider);
       const runner = new Runner();
 

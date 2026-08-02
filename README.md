@@ -444,28 +444,185 @@ at configure time rather than at first request.
 <br/>
 
 Every error extends `AnikiError`, so a single `catch` can branch on `instanceof` with no string
-matching. Raw provider errors are always translated before they reach you.
+matching — or, when you'd rather not import every class you might see, on the stable `error.code`
+string instead. Raw provider errors are always translated before they reach you.
 
-| Category | Errors |
-| --- | --- |
-| **Configuration** | `ConfigurationError`, `ValidationError` |
-| **Provider** | `AuthenticationError`, `RateLimitError`, `ProviderTimeoutError`, `ProviderConnectionError`, `InvalidRequestError`, `ModelNotFoundError`, `ProviderResponseError` |
-| **Tools** | `ToolNotFoundError`, `DuplicateToolError`, `ToolInputValidationError`, `ToolOutputValidationError`, `ToolExecutionError`, `ToolTimeoutError`, `MaxToolIterationsError` |
-| **Output** | `OutputParseError`, `OutputValidationError`, `OutputProcessingError` |
-| **Streaming** | `StreamConsumedError`, `StreamAbortedError`, `StreamingNotSupportedError` |
-| **Middleware** | `MiddlewareContractError`, `MiddlewareExecutionError`, `RetryExhaustedError`, `CacheError` |
+| Category | Errors | `code` |
+| --- | --- | --- |
+| **Configuration** | `ConfigurationError` | `CONFIGURATION_ERROR` |
+| | `ValidationError` | `VALIDATION_ERROR` |
+| **Provider** | `AuthenticationError`, `RateLimitError`, `ProviderTimeoutError`, `ProviderConnectionError`, `InvalidRequestError`, `ModelNotFoundError`, `ProviderResponseError` | `PROVIDER_ERROR` |
+| **Tools** | `ToolNotFoundError` | `TOOL_NOT_FOUND` |
+| | `DuplicateToolError` | `TOOL_DUPLICATE` |
+| | `ToolInputValidationError` | `TOOL_INPUT_VALIDATION` |
+| | `ToolOutputValidationError` | `TOOL_OUTPUT_VALIDATION` |
+| | `ToolExecutionError` | `TOOL_EXECUTION_FAILED` |
+| | `ToolTimeoutError` | `TOOL_TIMEOUT` |
+| | `MaxToolIterationsError` | `TOOL_MAX_ITERATIONS` |
+| **Output** | `OutputParseError` | `OUTPUT_PARSE_ERROR` |
+| | `OutputValidationError` | `OUTPUT_VALIDATION_ERROR` |
+| | `OutputProcessingError` | `OUTPUT_PROCESSING_ERROR` |
+| **Streaming** | `StreamError` | `STREAM_ERROR` |
+| | `StreamConsumedError` | `STREAM_ALREADY_CONSUMED` |
+| | `StreamAbortedError` | `STREAM_ABORTED` |
+| | `StreamingNotSupportedError` | `STREAMING_NOT_SUPPORTED` |
+| **Middleware** | `MiddlewareContractError` | `MIDDLEWARE_CONTRACT_VIOLATION` |
+| | `MiddlewareExecutionError` | `MIDDLEWARE_EXECUTION_FAILED` |
+| | `RetryExhaustedError` | `RETRY_EXHAUSTED` |
+| | `CacheError` | `CACHE_ERROR` |
+
+The provider taxonomy (`AuthenticationError`, `RateLimitError`, ...) all share the base
+`PROVIDER_ERROR` code but carry their own structured fields (`statusCode`, `providerCode`,
+`retryable`, ...) — narrow with `instanceof` when you need those, or with `isRetryableError` below
+when all you care about is whether retrying could help.
 
 ```ts
-import { RateLimitError, OutputValidationError } from "aniki-sdk";
+import { RateLimitError, OutputValidationError, isAnikiError, isRetryableError } from "aniki-sdk";
 
 try {
   await runner.run(agent, { message: "Hello" });
 } catch (error) {
+  // instanceof narrowing, when you know exactly which class you're handling
   if (error instanceof RateLimitError) return scheduleRetry(error);
   if (error instanceof OutputValidationError) return reportBadSchema(error);
+
+  // isRetryableError narrows to any ProviderResponseError the provider marked retryable
+  if (isRetryableError(error)) return scheduleRetry(error);
+
+  // error.code, for exhaustive switching without importing every class
+  if (isAnikiError(error)) {
+    switch (error.code) {
+      case "TOOL_MAX_ITERATIONS":
+        return abortRun(error);
+      case "OUTPUT_VALIDATION_ERROR":
+        return reportBadSchema(error);
+      default:
+        logger.error("run failed", error.toJSON());
+        throw error;
+    }
+  }
+
   throw error;
 }
 ```
+
+Every `AnikiError` carries a `context` object with the structured fields specific to that failure
+(`toolName`, `attempts`, `providerName`, ...) and a `toJSON()` method that renders `{ name, code,
+message, context, cause? }` — `context` passed through the same redaction `ConsoleLogger` uses, and
+`cause` flattened to `{ name, message }`, never a stack — so an error can go straight into a
+structured log sink without hand-picking fields:
+
+```ts
+logger.error("run failed", error.toJSON());
+// { name: "ToolTimeoutError", code: "TOOL_TIMEOUT", message: "...",
+//   context: { toolName: "get_weather", toolCallId: "call-1", timeoutMs: 5000 } }
+```
+
+</details>
+
+<details>
+<summary><b>&#9989;&nbsp; Validation — fail fast, with a message you can act on</b></summary>
+
+<br/>
+
+Every public constructor validates its input before doing any work — an `Agent` built with a
+malformed provider or a `Tool` built with a non-Zod schema throws immediately, not on first use.
+Two kinds of check run, depending on what's being validated:
+
+- **Structural/type checks** (a `Tool`'s Zod schemas, a `Runner`'s `maxToolIterations`, an
+  `Agent`'s `provider` implementing `IProvider`) run at **construction time**, via the SDK's
+  internal `Guard` assertions — a fail-fast layer that every constructor routes through.
+- **Content checks that depend on runtime values** — a tool call's arguments against its input
+  schema, a model's response against the agent's output schema — necessarily run **during a
+  `Runner.run` call**, since there's nothing to validate until the model responds.
+
+Every validation failure throws `ValidationError` with a message in a consistent
+**what → why → fix** shape, plus a `context` object carrying the offending `subject` and the
+`received` value — so a failure is actionable without opening the SDK's source:
+
+```
+Agent.provider must implement IProvider: "generate" is not a function. Pass a provider instance
+(e.g. new OpenAIProvider(...)) or a registered provider name such as "openai".
+```
+
+```ts
+try {
+  new Agent({ name: "Assistant", instructions: "...", model: "gpt-5.5", provider: {} as never });
+} catch (error) {
+  if (error instanceof ValidationError) {
+    console.error(error.message); // the what → why → fix message above
+    console.error(error.context);  // { subject: "Agent.provider", received: {} }
+  }
+}
+```
+
+</details>
+
+<details>
+<summary><b>&#129514;&nbsp; Testing your agents — no network, no API key</b></summary>
+
+<br/>
+
+`aniki-sdk/testing` ships `MockProvider` and `MockLogger` — the same test doubles the SDK's own
+390+ provider-dependent tests run against — so you can exercise an `Agent`/`Runner` end to end
+without a real vendor call.
+
+`MockProvider` implements `IProvider` with a scripted queue: `enqueueResponse` for a normal reply
+(merged over sane defaults, so you only set the fields you care about), `enqueueToolCall` for a
+tool-calling turn, `enqueueError` for a provider failure, and `enqueueStream` for a streaming
+script. It also records every request it received (`calls`, `callCount`, `lastRequest`), so you can
+assert on exactly what the `Runner` sent.
+
+```ts
+import { Agent, Runner } from "aniki-sdk";
+import { MockProvider } from "aniki-sdk/testing";
+import { z } from "zod";
+
+test("extracts a typed user from the model's reply", async () => {
+  const provider = new MockProvider();
+  provider.enqueueResponse({ content: '{"name":"Lalit","email":"lalit@example.com"}' });
+
+  const agent = new Agent({
+    name: "Extractor",
+    instructions: "Extract the user described in the message.",
+    model: "gpt-5.5",
+    provider,
+    output: z.object({ name: z.string(), email: z.string() }),
+  });
+
+  const result = await new Runner().run(agent, { message: "Lalit, lalit@example.com" });
+
+  expect(result.output.email).toBe("lalit@example.com");
+  expect(provider.callCount).toBe(1);
+});
+
+test("surfaces a provider failure as ProviderError, never raw", async () => {
+  const provider = new MockProvider();
+  provider.enqueueError(new Error("connection reset"));
+
+  const agent = new Agent({ name: "Assistant", instructions: "...", model: "gpt-5.5", provider });
+
+  await expect(new Runner().run(agent, { message: "Hi" })).rejects.toThrow(ProviderError);
+});
+```
+
+`MockLogger` implements `ILogger`, capturing every `{ level, message, fields }` record instead of
+writing anywhere — useful for asserting a `LoggingMiddleware` or `RetryMiddleware` logged what you
+expect:
+
+```ts
+import { MockLogger } from "aniki-sdk/testing";
+
+const logger = new MockLogger();
+const runner = new Runner(undefined, undefined, { logger });
+
+// ... run something that logs on a middleware failure ...
+
+expect(logger.recordsAt("error")).toHaveLength(1);
+```
+
+Both are real classes with encapsulated state — no `vi.fn()` dependency — so they work under any
+test runner, not just Vitest.
 
 </details>
 
@@ -562,7 +719,7 @@ dependency you're putting on your critical path.
   <tr>
     <td width="50%" valign="top">
       <b>Tested</b><br/><br/>
-      <sub>380 unit tests across 37 suites. Every provider request is mocked — the test run makes no network calls and needs no API key.</sub>
+      <sub>590+ unit tests across 47 suites, with coverage thresholds enforced in CI. Every provider request is mocked — via the shipped <code>MockProvider</code> test double — so the run makes no network calls and needs no API key.</sub>
     </td>
     <td width="50%" valign="top">
       <b>Strictly typed</b><br/><br/>
@@ -582,11 +739,13 @@ dependency you're putting on your critical path.
 </table>
 
 ```bash
-npm test              # run the suite
-npm run test:coverage # coverage report
-npm run lint          # eslint
-npm run format        # prettier
-npm run build         # tsup → dist/ (ESM + CJS + .d.ts)
+npm test               # run the suite
+npm run test:coverage  # coverage report (thresholds: 97% stmts/lines/funcs, 93% branches)
+npm run typecheck      # tsc --noEmit
+npm run lint           # eslint
+npm run format         # prettier
+npm run verify         # typecheck + lint + test, in order
+npm run build          # tsup → dist/ (ESM + CJS + .d.ts)
 ```
 
 ---
@@ -600,7 +759,9 @@ npm run build         # tsup → dist/ (ESM + CJS + .d.ts)
 - ✅ Tool system — registry, executor, validation, timeouts
 - ✅ Structured output — extraction, Zod validation, typed results
 - ✅ Streaming — `RunStream`, delta text, typed events, abort
-- ✅ **Middleware, pluggable logging and canonical lifecycle events**
+- ✅ Middleware, pluggable logging and canonical lifecycle events
+- ✅ **Serializable error taxonomy (`code`, `context`, `toJSON`), fail-fast validation, and a
+  shipped `aniki-sdk/testing` mock kit**
 
 **Next**
 

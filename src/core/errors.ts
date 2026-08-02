@@ -43,7 +43,12 @@ export type ErrorCode =
   | "RETRY_EXHAUSTED"
   | "CACHE_ERROR";
 
-/** The shape {@link AnikiError.toJSON} returns — safe to pass directly to a structured log sink. */
+/**
+ * The shape {@link AnikiError.toJSON} returns — safe to pass directly to a
+ * structured log sink. Carries an index signature so it can be passed
+ * directly as a logger's `fields` argument (see {@link LogFields}) without
+ * a cast, e.g. `logger.error("run failed", error.toJSON())`.
+ */
 export interface AnikiErrorJson {
   /** This error's concrete class name, e.g. `"ToolNotFoundError"`. */
   readonly name: string;
@@ -55,6 +60,7 @@ export interface AnikiErrorJson {
   readonly context: Readonly<Record<string, unknown>>;
   /** The wrapped cause, flattened to just its name and message when one is present. */
   readonly cause?: { readonly name: string; readonly message: string };
+  readonly [key: string]: unknown;
 }
 
 /** Flattens an unknown `cause` to `{ name, message }`, never a stack or raw object. */

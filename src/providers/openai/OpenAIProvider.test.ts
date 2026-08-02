@@ -106,6 +106,43 @@ describe("OpenAIProvider", () => {
   });
 
   it.each([
+    ["no trailing slash", "https://custom.example.com/v1"],
+    ["one trailing slash", "https://custom.example.com/v1/"],
+    ["multiple trailing slashes", "https://custom.example.com/v1///"],
+  ])(
+    "normalizes the base URL (%s) before appending the chat completions path",
+    async (_label, baseURL) => {
+      const httpClient = new StubHttpClient({ status: 200, headers: {}, body: jsonBody() });
+      const provider = new OpenAIProvider({ apiKey: "sk-test", baseURL }, { httpClient });
+
+      await provider.generate({ model: "gpt-5.5", messages: [{ role: "user", content: "Hi" }] });
+
+      expect(httpClient.lastRequest?.url).toBe("https://custom.example.com/v1/chat/completions");
+    },
+  );
+
+  it.each([
+    ["no trailing slash", "https://custom.example.com/v1"],
+    ["one trailing slash", "https://custom.example.com/v1/"],
+    ["multiple trailing slashes", "https://custom.example.com/v1///"],
+  ])(
+    "normalizes the base URL (%s) before appending the chat completions path when streaming",
+    async (_label, baseURL) => {
+      const httpClient = new StubHttpClient(
+        { status: 200, headers: {}, body: "" },
+        { status: 200, headers: {}, body: toByteStream([`data: [DONE]\n\n`]) },
+      );
+      const provider = new OpenAIProvider({ apiKey: "sk-test", baseURL }, { httpClient });
+
+      await collect(
+        provider.generateStream({ model: "gpt-5.5", messages: [{ role: "user", content: "Hi" }] }),
+      );
+
+      expect(httpClient.lastRequest?.url).toBe("https://custom.example.com/v1/chat/completions");
+    },
+  );
+
+  it.each([
     [401, "AuthenticationError"],
     [403, "AuthenticationError"],
     [404, "InvalidRequestError"],

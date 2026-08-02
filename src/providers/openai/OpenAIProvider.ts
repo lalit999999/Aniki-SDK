@@ -96,7 +96,7 @@ export class OpenAIProvider implements IProvider {
   /** Requests a single completion from the underlying model. */
   async generate(request: ProviderRequest): Promise<ProviderResponse> {
     const body = this.requestBuilder.build(request);
-    const url = `${this.baseURL}${CHAT_COMPLETIONS_PATH}`;
+    const url = this.endpointURL();
     const response = await this.httpClient.request({
       method: "POST",
       url,
@@ -115,7 +115,7 @@ export class OpenAIProvider implements IProvider {
   /** Requests a streamed completion, yielding incremental chunks as they arrive. */
   async *generateStream(request: ProviderRequest): AsyncIterable<ProviderStreamChunk> {
     const body = this.requestBuilder.buildStream(request);
-    const url = `${this.baseURL}${CHAT_COMPLETIONS_PATH}`;
+    const url = this.endpointURL();
     const response = await this.httpClient.requestStream({
       method: "POST",
       url,
@@ -134,5 +134,10 @@ export class OpenAIProvider implements IProvider {
 
   private headers(): Readonly<Record<string, string>> {
     return { "content-type": "application/json", ...this.authStrategy.getHeaders() };
+  }
+
+  /** Joins {@link baseURL} and {@link CHAT_COMPLETIONS_PATH}, stripping any trailing slash(es) from the base first so a `baseURL` like `".../v1/"` never produces a doubled `//` in the request URL. */
+  private endpointURL(): string {
+    return `${this.baseURL.replace(/\/+$/, "")}${CHAT_COMPLETIONS_PATH}`;
   }
 }

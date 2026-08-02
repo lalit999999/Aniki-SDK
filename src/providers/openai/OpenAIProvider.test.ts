@@ -184,6 +184,27 @@ describe("OpenAIProvider", () => {
     expect(chunks).toEqual([{ delta: "Hello", finishReason: "stop" }]);
   });
 
+  it("produces a bounded, readable message for a non-JSON HTML error response, not a raw body dump", async () => {
+    const html = `<!DOCTYPE html><html><head><title>404</title></head><body>${"not found ".repeat(50)}</body></html>`;
+    const httpClient = new StubHttpClient({
+      status: 404,
+      headers: { "content-type": "text/html" },
+      body: html,
+    });
+    const provider = new OpenAIProvider(
+      { apiKey: "sk-test", baseURL: "https://openrouter.ai/v1" },
+      { httpClient },
+    );
+
+    await expect(
+      provider.generate({ model: "gpt-5.5", messages: [{ role: "user", content: "Hi" }] }),
+    ).rejects.toMatchObject({
+      name: "InvalidRequestError",
+      message:
+        "OpenAI request failed with status 404 (non-JSON HTML response) — https://openrouter.ai/v1/chat/completions",
+    });
+  });
+
   it("translates an error response encountered while streaming", async () => {
     const httpClient = new StubHttpClient(
       { status: 200, headers: {}, body: "" },

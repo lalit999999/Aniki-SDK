@@ -96,16 +96,17 @@ export class OpenAIProvider implements IProvider {
   /** Requests a single completion from the underlying model. */
   async generate(request: ProviderRequest): Promise<ProviderResponse> {
     const body = this.requestBuilder.build(request);
+    const url = `${this.baseURL}${CHAT_COMPLETIONS_PATH}`;
     const response = await this.httpClient.request({
       method: "POST",
-      url: `${this.baseURL}${CHAT_COMPLETIONS_PATH}`,
+      url,
       headers: this.headers(),
       body: JSON.stringify(body),
       timeoutMs: this.timeoutMs,
     });
 
     if (response.status < 200 || response.status >= 300) {
-      this.errorTranslator.translate(response.status, response.body, response.headers);
+      this.errorTranslator.translate(response.status, response.body, response.headers, url);
     }
 
     return this.responseParser.parse(response.body);
@@ -114,9 +115,10 @@ export class OpenAIProvider implements IProvider {
   /** Requests a streamed completion, yielding incremental chunks as they arrive. */
   async *generateStream(request: ProviderRequest): AsyncIterable<ProviderStreamChunk> {
     const body = this.requestBuilder.buildStream(request);
+    const url = `${this.baseURL}${CHAT_COMPLETIONS_PATH}`;
     const response = await this.httpClient.requestStream({
       method: "POST",
-      url: `${this.baseURL}${CHAT_COMPLETIONS_PATH}`,
+      url,
       headers: this.headers(),
       body: JSON.stringify(body),
       timeoutMs: this.timeoutMs,
@@ -124,7 +126,7 @@ export class OpenAIProvider implements IProvider {
 
     if (response.status < 200 || response.status >= 300) {
       const bodyText = await drain(response.body);
-      this.errorTranslator.translate(response.status, bodyText, response.headers);
+      this.errorTranslator.translate(response.status, bodyText, response.headers, url);
     }
 
     yield* this.responseParser.parseStream(response.body);

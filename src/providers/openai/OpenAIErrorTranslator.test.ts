@@ -101,4 +101,79 @@ describe("OpenAIErrorTranslator", () => {
       expect((error as AuthenticationError).cause).toBeDefined();
     }
   });
+
+  it("synthesizes a bounded message for an HTML error body, never echoing it raw", () => {
+    const html = `<!DOCTYPE html><html><head><title>404</title></head><body>${"not found ".repeat(50)}</body></html>`;
+    try {
+      new OpenAIErrorTranslator().translate(
+        404,
+        html,
+        { "content-type": "text/html" },
+        "https://openrouter.ai/v1/chat/completions",
+      );
+      expect.fail("expected translate to throw");
+    } catch (error) {
+      const invalidRequestError = error as InvalidRequestError;
+      expect(invalidRequestError.message).toBe(
+        "OpenAI request failed with status 404 (non-JSON HTML response) — https://openrouter.ai/v1/chat/completions",
+      );
+      expect(invalidRequestError.message).not.toContain("<html>");
+      expect(invalidRequestError.message.length).toBeLessThan(200);
+      expect(invalidRequestError.cause).toBe(html);
+    }
+  });
+
+  it("detects HTML by a leading '<' even without an html content-type header", () => {
+    const html = "<html><body>Not Found</body></html>";
+    expect(() => new OpenAIErrorTranslator().translate(404, html, {})).toThrow(
+      /non-JSON HTML response/,
+    );
+  });
+
+  it("synthesizes a bounded, truncated message for a plain-text body", () => {
+    const plainText = "x".repeat(500);
+    try {
+      new OpenAIErrorTranslator().translate(502, plainText, { "content-type": "text/plain" });
+      expect.fail("expected translate to throw");
+    } catch (error) {
+      const providerError = error as ProviderResponseError;
+      expect(providerError.message).toContain("OpenAI request failed with status 502:");
+      expect(providerError.message).toContain("…");
+      expect(providerError.message).toContain("(truncated, 500 chars total)");
+      expect(providerError.message.length).toBeLessThan(plainText.length);
+      expect(providerError.cause).toBe(plainText);
+    }
+  });
+
+  it("synthesizes a message noting an empty body", () => {
+    expect(() => new OpenAIErrorTranslator().translate(500, "", {})).toThrow(
+      /OpenAI request failed with status 500 \(empty response body\)/,
+    );
+  });
+
+  it("synthesizes a bounded message for valid JSON that isn't OpenAI's error envelope", () => {
+    const oversizedJson = JSON.stringify({ notAnError: "x".repeat(500) });
+    try {
+      new OpenAIErrorTranslator().translate(400, oversizedJson, {
+        "content-type": "application/json",
+      });
+      expect.fail("expected translate to throw");
+    } catch (error) {
+      const invalidRequestError = error as InvalidRequestError;
+      expect(invalidRequestError.message).toContain("OpenAI request failed with status 400:");
+      expect(invalidRequestError.message.length).toBeLessThan(oversizedJson.length);
+      expect(invalidRequestError.cause).toBe(oversizedJson);
+    }
+  });
+
+  it("leaves the well-formed error-envelope path unchanged", () => {
+    try {
+      new OpenAIErrorTranslator().translate(400, errorBody("bad request", "invalid_param"), {});
+      expect.fail("expected translate to throw");
+    } catch (error) {
+      const invalidRequestError = error as InvalidRequestError;
+      expect(invalidRequestError.message).toBe("bad request");
+      expect(invalidRequestError.providerCode).toBe("invalid_param");
+    }
+  });
 });

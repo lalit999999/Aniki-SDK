@@ -1,14 +1,19 @@
 import { describe, expect, it } from "vitest";
 import {
   AnikiError,
+  CacheError,
   ConfigurationError,
   DuplicateToolError,
   MaxToolIterationsError,
+  MiddlewareContractError,
+  MiddlewareError,
+  MiddlewareExecutionError,
   OutputError,
   OutputParseError,
   OutputProcessingError,
   OutputValidationError,
   ProviderError,
+  RetryExhaustedError,
   StreamAbortedError,
   StreamConsumedError,
   StreamError,
@@ -229,5 +234,58 @@ describe("StreamError hierarchy", () => {
     expect(error.providerName).toBe("openai");
     expect(error.reason).toBe("capabilities.streaming is false");
     expect(error.message).toContain("openai");
+  });
+});
+
+describe("MiddlewareError hierarchy", () => {
+  it("MiddlewareExecutionError names the throwing middleware and wraps its cause", () => {
+    const cause = new Error("boom");
+    const error = new MiddlewareExecutionError("RetryMiddleware", cause);
+
+    expect(error).toBeInstanceOf(MiddlewareError);
+    expect(error).toBeInstanceOf(AnikiError);
+    expect(error.name).toBe("MiddlewareExecutionError");
+    expect(error.code).toBe("MIDDLEWARE_EXECUTION_FAILED");
+    expect(error.middlewareName).toBe("RetryMiddleware");
+    expect(error.cause).toBe(cause);
+    expect(error.message).toContain("RetryMiddleware");
+    expect(error.message).toContain("boom");
+  });
+
+  it("MiddlewareContractError names the offending middleware", () => {
+    const error = new MiddlewareContractError("CacheMiddleware", "called next() twice");
+
+    expect(error).toBeInstanceOf(MiddlewareError);
+    expect(error.name).toBe("MiddlewareContractError");
+    expect(error.code).toBe("MIDDLEWARE_CONTRACT_VIOLATION");
+    expect(error.middlewareName).toBe("CacheMiddleware");
+    expect(error.message).toContain("CacheMiddleware");
+    expect(error.message).toContain("called next() twice");
+  });
+
+  it("RetryExhaustedError carries the attempt count and wraps the last failure", () => {
+    const cause = new Error("rate limited");
+    const error = new RetryExhaustedError(3, cause);
+
+    expect(error).toBeInstanceOf(MiddlewareError);
+    expect(error.name).toBe("RetryExhaustedError");
+    expect(error.code).toBe("RETRY_EXHAUSTED");
+    expect(error.attempts).toBe(3);
+    expect(error.cause).toBe(cause);
+    expect(error.message).toContain("3");
+    expect(error.message).toContain("rate limited");
+  });
+
+  it("CacheError carries the failing operation and wraps its cause", () => {
+    const cause = new Error("disk full");
+    const error = new CacheError("set", cause);
+
+    expect(error).toBeInstanceOf(MiddlewareError);
+    expect(error.name).toBe("CacheError");
+    expect(error.code).toBe("CACHE_ERROR");
+    expect(error.operation).toBe("set");
+    expect(error.cause).toBe(cause);
+    expect(error.message).toContain("set");
+    expect(error.message).toContain("disk full");
   });
 });

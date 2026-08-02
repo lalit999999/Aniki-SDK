@@ -197,3 +197,122 @@ export class MaxToolIterationsError extends ToolError {
     this.maxIterations = maxIterations;
   }
 }
+
+/** Raw model text carried by an output error is truncated to this many characters. */
+const MAX_RAW_SNIPPET_LENGTH = 500;
+
+/** Truncates `raw` to {@link MAX_RAW_SNIPPET_LENGTH} characters so errors never carry unbounded model output. */
+function truncateRaw(raw: string): string {
+  return raw.length > MAX_RAW_SNIPPET_LENGTH ? `${raw.slice(0, MAX_RAW_SNIPPET_LENGTH)}...` : raw;
+}
+
+/**
+ * Abstract base for every structured-output error.
+ *
+ * Never thrown directly — see {@link OutputParseError},
+ * {@link OutputValidationError}, and {@link OutputProcessingError}.
+ */
+export abstract class OutputError extends AnikiError {}
+
+/** Thrown when the model's raw text contains no extractable JSON payload, or that payload fails to parse. */
+export class OutputParseError extends OutputError {
+  readonly code = "OUTPUT_PARSE_ERROR";
+  /** The raw model text that could not be parsed, truncated to {@link MAX_RAW_SNIPPET_LENGTH} characters. */
+  readonly raw: string;
+
+  constructor(message: string, raw: string, cause?: unknown) {
+    super(message, cause);
+    this.name = "OutputParseError";
+    this.raw = truncateRaw(raw);
+  }
+}
+
+/** Thrown when parsed JSON fails the agent's Zod output schema. */
+export class OutputValidationError extends OutputError {
+  readonly code = "OUTPUT_VALIDATION_ERROR";
+  /** A human-readable description of the schema violations, via {@link formatZodIssues}. */
+  readonly issues: string;
+  /** The raw model text that produced the invalid payload, truncated to {@link MAX_RAW_SNIPPET_LENGTH} characters. */
+  readonly raw: string;
+
+  constructor(issues: string, raw: string) {
+    super(`Structured output failed schema validation: ${issues}`);
+    this.name = "OutputValidationError";
+    this.issues = issues;
+    this.raw = truncateRaw(raw);
+  }
+}
+
+/** Thrown when a processor registered on an {@link OutputPipeline} throws. Wraps the original failure in `cause`. */
+export class OutputProcessingError extends OutputError {
+  readonly code = "OUTPUT_PROCESSING_ERROR";
+  /** The name of the processor that threw. */
+  readonly processorName: string;
+
+  constructor(processorName: string, cause: unknown) {
+    const reason = cause instanceof Error ? cause.message : String(cause);
+    super(`Output processor "${processorName}" threw during processing: ${reason}`, cause);
+    this.name = "OutputProcessingError";
+    this.processorName = processorName;
+  }
+}
+
+/**
+ * Thrown for a streaming transport or iteration failure.
+ *
+ * Concrete on its own — a foreign throw surfaced while consuming a stream is
+ * wrapped directly as `StreamError` — and also the base for the more
+ * specific {@link StreamAbortedError}, {@link StreamConsumedError}, and
+ * {@link StreamingNotSupportedError}. `code` is typed as `string` (rather
+ * than inferred as the `"STREAM_ERROR"` literal) precisely so those
+ * subclasses can narrow it to their own stable identifier.
+ */
+export class StreamError extends AnikiError {
+  readonly code: string = "STREAM_ERROR";
+
+  constructor(message: string, cause?: unknown) {
+    super(message, cause);
+    this.name = "StreamError";
+  }
+}
+
+/** Thrown when a stream's consumer calls `abort()`, or the caller-supplied `AbortSignal` fires. */
+export class StreamAbortedError extends StreamError {
+  readonly code = "STREAM_ABORTED";
+  /** The caller-supplied reason for aborting, when given. */
+  readonly reason?: string;
+
+  constructor(reason?: string) {
+    super(reason ? `Stream aborted: ${reason}` : "Stream aborted");
+    this.name = "StreamAbortedError";
+    if (reason !== undefined) {
+      this.reason = reason;
+    }
+  }
+}
+
+/** Thrown when a {@link RunStream} is iterated, or its `result` awaited, more than once. */
+export class StreamConsumedError extends StreamError {
+  readonly code = "STREAM_ALREADY_CONSUMED";
+
+  constructor() {
+    super("This stream has already been consumed and cannot be read again");
+    this.name = "StreamConsumedError";
+  }
+}
+
+/** Thrown by {@link Runner.stream} when the agent's provider or configuration cannot support streaming. */
+export class StreamingNotSupportedError extends StreamError {
+  readonly code = "STREAMING_NOT_SUPPORTED";
+  /** The name of the provider that could not stream this request. */
+  readonly providerName: string;
+  /** Why streaming is unavailable for this run. */
+  readonly reason: string;
+
+  constructor(providerName: string, reason: string) {
+    super(`Provider "${providerName}" cannot stream this request: ${reason}`);
+    this.name = "StreamingNotSupportedError";
+    this.providerName = providerName;
+    this.reason = reason;
+  }
+}

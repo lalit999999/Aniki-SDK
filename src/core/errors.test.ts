@@ -4,7 +4,15 @@ import {
   ConfigurationError,
   DuplicateToolError,
   MaxToolIterationsError,
+  OutputError,
+  OutputParseError,
+  OutputProcessingError,
+  OutputValidationError,
   ProviderError,
+  StreamAbortedError,
+  StreamConsumedError,
+  StreamError,
+  StreamingNotSupportedError,
   ToolError,
   ToolExecutionError,
   ToolInputValidationError,
@@ -127,5 +135,99 @@ describe("ToolError hierarchy", () => {
     expect(error.code).toBe("TOOL_MAX_ITERATIONS");
     expect(error.maxIterations).toBe(5);
     expect(error.message).toContain("5");
+  });
+});
+
+describe("OutputError hierarchy", () => {
+  it("OutputParseError carries a truncated raw snippet and an optional cause", () => {
+    const cause = new SyntaxError("Unexpected token");
+    const error = new OutputParseError("No JSON payload found", "not json at all", cause);
+
+    expect(error).toBeInstanceOf(OutputError);
+    expect(error).toBeInstanceOf(AnikiError);
+    expect(error.name).toBe("OutputParseError");
+    expect(error.code).toBe("OUTPUT_PARSE_ERROR");
+    expect(error.raw).toBe("not json at all");
+    expect(error.cause).toBe(cause);
+  });
+
+  it("OutputParseError truncates raw text longer than 500 characters", () => {
+    const longRaw = "x".repeat(600);
+    const error = new OutputParseError("No JSON payload found", longRaw);
+
+    expect(error.raw).toHaveLength(503);
+    expect(error.raw.endsWith("...")).toBe(true);
+  });
+
+  it("OutputValidationError carries formatted issues and a truncated raw snippet", () => {
+    const error = new OutputValidationError("email: Required", '{"name":"Lalit"}');
+
+    expect(error).toBeInstanceOf(OutputError);
+    expect(error.name).toBe("OutputValidationError");
+    expect(error.code).toBe("OUTPUT_VALIDATION_ERROR");
+    expect(error.issues).toBe("email: Required");
+    expect(error.raw).toBe('{"name":"Lalit"}');
+    expect(error.message).toContain("email: Required");
+  });
+
+  it("OutputProcessingError names the throwing processor and wraps its cause", () => {
+    const cause = new Error("boom");
+    const error = new OutputProcessingError("redactor", cause);
+
+    expect(error).toBeInstanceOf(OutputError);
+    expect(error.name).toBe("OutputProcessingError");
+    expect(error.code).toBe("OUTPUT_PROCESSING_ERROR");
+    expect(error.processorName).toBe("redactor");
+    expect(error.cause).toBe(cause);
+    expect(error.message).toContain("redactor");
+    expect(error.message).toContain("boom");
+  });
+});
+
+describe("StreamError hierarchy", () => {
+  it("StreamError is concrete and carries a wrapped cause", () => {
+    const cause = new Error("socket hang up");
+    const error = new StreamError("Stream transport failed", cause);
+
+    expect(error).toBeInstanceOf(AnikiError);
+    expect(error.name).toBe("StreamError");
+    expect(error.code).toBe("STREAM_ERROR");
+    expect(error.cause).toBe(cause);
+  });
+
+  it("StreamAbortedError carries the abort reason when given", () => {
+    const error = new StreamAbortedError("user cancelled");
+
+    expect(error).toBeInstanceOf(StreamError);
+    expect(error.name).toBe("StreamAbortedError");
+    expect(error.code).toBe("STREAM_ABORTED");
+    expect(error.reason).toBe("user cancelled");
+    expect(error.message).toContain("user cancelled");
+  });
+
+  it("StreamAbortedError omits reason when not given", () => {
+    const error = new StreamAbortedError();
+
+    expect(error.reason).toBeUndefined();
+    expect(error.message).toBe("Stream aborted");
+  });
+
+  it("StreamConsumedError reports the one-shot violation", () => {
+    const error = new StreamConsumedError();
+
+    expect(error).toBeInstanceOf(StreamError);
+    expect(error.name).toBe("StreamConsumedError");
+    expect(error.code).toBe("STREAM_ALREADY_CONSUMED");
+  });
+
+  it("StreamingNotSupportedError carries the provider name and reason", () => {
+    const error = new StreamingNotSupportedError("openai", "capabilities.streaming is false");
+
+    expect(error).toBeInstanceOf(StreamError);
+    expect(error.name).toBe("StreamingNotSupportedError");
+    expect(error.code).toBe("STREAMING_NOT_SUPPORTED");
+    expect(error.providerName).toBe("openai");
+    expect(error.reason).toBe("capabilities.streaming is false");
+    expect(error.message).toContain("openai");
   });
 });

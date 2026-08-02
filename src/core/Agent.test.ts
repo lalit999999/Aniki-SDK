@@ -3,6 +3,7 @@ import { z } from "zod";
 import { Agent } from "./Agent.js";
 import { DuplicateToolError, ConfigurationError, ValidationError } from "./errors.js";
 import { InMemorySession } from "./Session.js";
+import type { IMiddleware } from "../middleware/Middleware.js";
 import type { IProvider } from "../providers/AIProvider.js";
 import { OpenAIProvider } from "../providers/openai/OpenAIProvider.js";
 import { Tool } from "../tools/Tool.js";
@@ -74,6 +75,7 @@ describe("Agent", () => {
   it("stores an optional output schema and tools/middleware arrays", () => {
     const output = z.object({ answer: z.string() });
     const weatherTool = makeTool("get_weather");
+    const middleware: IMiddleware = { name: "NoopMiddleware", execute: async (request, next) => next(request) };
     const agent = new Agent({
       name: "Assistant",
       instructions: "Be helpful.",
@@ -81,12 +83,40 @@ describe("Agent", () => {
       provider: createFakeProvider(),
       output,
       tools: [weatherTool],
-      middleware: [{}],
+      middleware: [middleware],
     });
 
     expect(agent.output).toBe(output);
     expect(agent.tools).toEqual([weatherTool]);
     expect(agent.middleware).toHaveLength(1);
+  });
+
+  describe("middleware validation", () => {
+    it("throws ValidationError when a middleware entry has no name", () => {
+      expect(
+        () =>
+          new Agent({
+            name: "Assistant",
+            instructions: "Be helpful.",
+            model: "gpt-5.5",
+            provider: createFakeProvider(),
+            middleware: [{ execute: async () => {} } as never],
+          }),
+      ).toThrow(ValidationError);
+    });
+
+    it("throws ValidationError when a middleware entry has no execute function", () => {
+      expect(
+        () =>
+          new Agent({
+            name: "Assistant",
+            instructions: "Be helpful.",
+            model: "gpt-5.5",
+            provider: createFakeProvider(),
+            middleware: [{ name: "Bad" } as never],
+          }),
+      ).toThrow(ValidationError);
+    });
   });
 
   describe("tools", () => {

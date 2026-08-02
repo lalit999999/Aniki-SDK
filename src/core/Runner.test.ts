@@ -3,6 +3,7 @@ import { z } from "zod";
 import { Agent } from "./Agent.js";
 import {
   MaxToolIterationsError,
+  MiddlewareExecutionError,
   OutputParseError,
   OutputValidationError,
   ProviderError,
@@ -11,6 +12,7 @@ import {
   ValidationError,
 } from "./errors.js";
 import { Runner } from "./Runner.js";
+import type { MiddlewareNext, MiddlewareRequest } from "../middleware/Middleware.js";
 import { AuthenticationError } from "../providers/errors.js";
 import { Tool } from "../tools/Tool.js";
 import type {
@@ -553,6 +555,356 @@ describe("Runner", () => {
       expect(finishedCalled).toBe(false);
       expect(errors).toHaveLength(1);
       expect(errors[0]?.message).toContain("nope");
+    });
+  });
+
+  describe("canonical lifecycle events", () => {
+    it("emits each canonical event immediately before its legacy counterpart", async () => {
+      const provider: IProvider = {
+        name: "fake",
+        capabilities: FAKE_CAPABILITIES,
+        generate: vi.fn(async (): Promise<ProviderResponse> => ({ content: "hi", model: "gpt-5.5" })),
+        generateStream: fakeGenerateStream,
+      };
+      const agent = createAgent(provider);
+      const runner = new Runner();
+      const seen: string[] = [];
+
+      for (const name of [
+        "agent:start",
+        "agent:started",
+        "llm:start",
+        "llm:request",
+        "llm:end",
+        "llm:response",
+        "agent:end",
+        "agent:finished",
+      ] as const) {
+        runner.on(name, () => seen.push(name));
+      }
+
+      await runner.run(agent, { message: "Hi" });
+
+      expect(seen).toEqual([
+        "agent:start",
+        "agent:started",
+        "llm:start",
+        "llm:request",
+        "llm:end",
+        "llm:response",
+        "agent:end",
+        "agent:finished",
+      ]);
+    });
+
+    it("agent:start and agent:end carry runId, agentName, model, and providerName", async () => {
+      const provider: IProvider = {
+        name: "fake",
+        capabilities: FAKE_CAPABILITIES,
+        generate: vi.fn(async (): Promise<ProviderResponse> => ({ content: "hi", model: "gpt-5.5" })),
+        generateStream: fakeGenerateStream,
+      };
+      const agent = createAgent(provider);
+      const runner = new Runner();
+
+      let startEvent: unknown;
+      let endEvent: { durationMs: number; iterations: number } | undefined;
+      runner.on("agent:start", (event) => {
+        startEvent = event;
+      });
+      runner.on("agent:end", (event) => {
+        endEvent = event;
+      });
+
+      const result = await runner.run(agent, { message: "Hi" });
+
+      expect(startEvent).toMatchObject({
+        runId: result.runId,
+        agentName: "Assistant",
+        model: "gpt-5.5",
+        providerName: "fake",
+      });
+      expect(endEvent).toMatchObject({ agentName: "Assistant", iterations: 1 });
+      expect(typeof endEvent?.durationMs).toBe("number");
+    });
+
+    it("llm:end carries durationMs, finishReason, and usage", async () => {
+      const provider: IProvider = {
+        name: "fake",
+        capabilities: FAKE_CAPABILITIES,
+        generate: vi.fn(async (): Promise<ProviderResponse> => ({
+          content: "hi",
+          model: "gpt-5.5",
+          finishReason: "stop",
+          usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
+        })),
+        generateStream: fakeGenerateStream,
+      };
+      const agent = createAgent(provider);
+      const runner = new Runner();
+      let llmEnd: { durationMs: number; finishReason?: string; usage?: unknown } | undefined;
+      runner.on("llm:end", (event) => {
+        llmEnd = event;
+      });
+
+      await runner.run(agent, { message: "Hi" });
+
+      expect(typeof llmEnd?.durationMs).toBe("number");
+      expect(llmEnd?.finishReason).toBe("stop");
+      expect(llmEnd?.usage).toEqual({ promptTokens: 1, completionTokens: 1, totalTokens: 2 });
+    });
+
+    it("emits llm:error before the legacy error event when the provider fails", async () => {
+      const provider: IProvider = {
+        name: "fake",
+        capabilities: FAKE_CAPABILITIES,
+        generate: vi.fn(async () => {
+          throw new Error("boom");
+        }),
+        generateStream: fakeGenerateStream,
+      };
+      const agent = createAgent(provider);
+      const runner = new Runner();
+      const seen: string[] = [];
+      runner.on("llm:error", () => seen.push("llm:error"));
+      runner.on("error", () => seen.push("error"));
+
+      await expect(runner.run(agent, { message: "Hi" })).rejects.toThrow(ProviderError);
+      expect(seen).toEqual(["llm:error", "error"]);
+    });
+
+    it("emits agent:error before the legacy error event when max tool iterations is exceeded", async () => {
+      const tool = makeWeatherTool(async () => ({ tempC: 1 }));
+      const call: ToolCall = { id: "call-1", name: "get_weather", arguments: { city: "Gaya" } };
+      const provider: IProvider = {
+        name: "fake",
+        capabilities: FAKE_CAPABILITIES,
+        generate: vi.fn(async (): Promise<ProviderResponse> => ({
+          content: "",
+          model: "gpt-5.5",
+          toolCalls: [call],
+        })),
+        generateStream: fakeGenerateStream,
+      };
+      const agent = createAgentWithTools(provider, [tool], { maxToolIterations: 1 });
+      const runner = new Runner();
+      const seen: string[] = [];
+      runner.on("agent:error", () => seen.push("agent:error"));
+      runner.on("error", () => seen.push("error"));
+
+      await expect(runner.run(agent, { message: "Loop forever" })).rejects.toThrow(
+        MaxToolIterationsError,
+      );
+      expect(seen).toEqual(["agent:error", "error"]);
+    });
+
+    it("emits tool:start/tool:end alongside the legacy tool events for a successful call", async () => {
+      const tool = makeWeatherTool(async () => ({ tempC: 21 }));
+      const call: ToolCall = { id: "call-1", name: "get_weather", arguments: { city: "Gaya" } };
+      const generate = vi
+        .fn<(request: ProviderRequest) => Promise<ProviderResponse>>()
+        .mockResolvedValueOnce({ content: "", model: "gpt-5.5", toolCalls: [call] })
+        .mockResolvedValueOnce({ content: "Done.", model: "gpt-5.5" });
+      const provider: IProvider = {
+        name: "fake",
+        capabilities: FAKE_CAPABILITIES,
+        generate,
+        generateStream: fakeGenerateStream,
+      };
+      const agent = createAgentWithTools(provider, [tool]);
+      const runner = new Runner();
+      const seen: string[] = [];
+      let toolEnd: { durationMs: number; ok: boolean } | undefined;
+
+      runner.on("tool:start", () => seen.push("tool:start"));
+      runner.on("tool:started", () => seen.push("tool:started"));
+      runner.on("tool:end", (event) => {
+        seen.push("tool:end");
+        toolEnd = event;
+      });
+      runner.on("tool:finished", () => seen.push("tool:finished"));
+
+      await runner.run(agent, { message: "What's the weather in Gaya?" });
+
+      expect(seen).toEqual(["tool:start", "tool:started", "tool:end", "tool:finished"]);
+      expect(toolEnd?.ok).toBe(true);
+      expect(typeof toolEnd?.durationMs).toBe("number");
+    });
+  });
+
+  describe("Runner.off and Runner.once", () => {
+    it("off() unsubscribes a listener registered via on()", async () => {
+      const provider: IProvider = {
+        name: "fake",
+        capabilities: FAKE_CAPABILITIES,
+        generate: vi.fn(async (): Promise<ProviderResponse> => ({ content: "hi", model: "gpt-5.5" })),
+        generateStream: fakeGenerateStream,
+      };
+      const agent = createAgent(provider);
+      const runner = new Runner();
+      let calls = 0;
+      const listener = () => {
+        calls += 1;
+      };
+
+      runner.on("agent:start", listener);
+      runner.off("agent:start", listener);
+      await runner.run(agent, { message: "Hi" });
+
+      expect(calls).toBe(0);
+    });
+
+    it("once() fires exactly one time even across multiple runs", async () => {
+      const provider: IProvider = {
+        name: "fake",
+        capabilities: FAKE_CAPABILITIES,
+        generate: vi.fn(async (): Promise<ProviderResponse> => ({ content: "hi", model: "gpt-5.5" })),
+        generateStream: fakeGenerateStream,
+      };
+      const agent = createAgent(provider);
+      const runner = new Runner();
+      let calls = 0;
+
+      runner.once("agent:start", () => {
+        calls += 1;
+      });
+      await runner.run(agent, { message: "Hi" });
+      await runner.run(agent, { message: "Hi again" });
+
+      expect(calls).toBe(1);
+    });
+  });
+
+  describe("middleware pipeline wiring", () => {
+    it("behaves identically to no middleware configured when none is given", async () => {
+      const provider: IProvider = {
+        name: "fake",
+        capabilities: FAKE_CAPABILITIES,
+        generate: vi.fn(async (): Promise<ProviderResponse> => ({ content: "hi", model: "gpt-5.5" })),
+        generateStream: fakeGenerateStream,
+      };
+      const agent = createAgent(provider);
+      const runner = new Runner();
+
+      const result = await runner.run(agent, { message: "Hi" });
+
+      expect(result.content).toBe("hi");
+      expect(provider.generate).toHaveBeenCalledTimes(1);
+    });
+
+    it("runs Runner-level middleware before Agent-level middleware", async () => {
+      const provider: IProvider = {
+        name: "fake",
+        capabilities: FAKE_CAPABILITIES,
+        generate: vi.fn(async (): Promise<ProviderResponse> => ({ content: "hi", model: "gpt-5.5" })),
+        generateStream: fakeGenerateStream,
+      };
+      const order: string[] = [];
+      const runnerMiddleware = {
+        name: "RunnerLevel",
+        execute: async (
+          request: MiddlewareRequest,
+          next: MiddlewareNext,
+        ) => {
+          order.push("runner-level:before");
+          const result = await next(request);
+          order.push("runner-level:after");
+          return result;
+        },
+      };
+      const agentMiddleware = {
+        name: "AgentLevel",
+        execute: async (
+          request: MiddlewareRequest,
+          next: MiddlewareNext,
+        ) => {
+          order.push("agent-level:before");
+          const result = await next(request);
+          order.push("agent-level:after");
+          return result;
+        },
+      };
+      const agent = new Agent({
+        name: "Assistant",
+        instructions: "You are a helpful assistant.",
+        model: "gpt-5.5",
+        provider,
+        middleware: [agentMiddleware],
+      });
+      const runner = new Runner(undefined, undefined, { middleware: [runnerMiddleware] });
+
+      await runner.run(agent, { message: "Hi" });
+
+      expect(order).toEqual([
+        "runner-level:before",
+        "agent-level:before",
+        "agent-level:after",
+        "runner-level:after",
+      ]);
+    });
+
+    it("preserves ProviderError wrapping when middleware is configured", async () => {
+      const provider: IProvider = {
+        name: "fake",
+        capabilities: FAKE_CAPABILITIES,
+        generate: vi.fn(async () => {
+          throw new Error("network exploded");
+        }),
+        generateStream: fakeGenerateStream,
+      };
+      const passthrough = {
+        name: "Passthrough",
+        execute: async (
+          request: MiddlewareRequest,
+          next: MiddlewareNext,
+        ) => next(request),
+      };
+      const agent = new Agent({
+        name: "Assistant",
+        instructions: "You are a helpful assistant.",
+        model: "gpt-5.5",
+        provider,
+        middleware: [passthrough],
+      });
+      const runner = new Runner();
+
+      await expect(runner.run(agent, { message: "Hi" })).rejects.toThrow(ProviderError);
+    });
+
+    it("emits middleware:error and the legacy error event, then propagates, when a middleware throws", async () => {
+      const provider: IProvider = {
+        name: "fake",
+        capabilities: FAKE_CAPABILITIES,
+        generate: vi.fn(async (): Promise<ProviderResponse> => ({ content: "hi", model: "gpt-5.5" })),
+        generateStream: fakeGenerateStream,
+      };
+      const broken = {
+        name: "BrokenMiddleware",
+        execute: async () => {
+          throw new Error("middleware exploded");
+        },
+      };
+      const agent = new Agent({
+        name: "Assistant",
+        instructions: "You are a helpful assistant.",
+        model: "gpt-5.5",
+        provider,
+        middleware: [broken],
+      });
+      const runner = new Runner();
+      const seen: string[] = [];
+      let middlewareErrorEvent: { middlewareName?: string } | undefined;
+
+      runner.on("middleware:error", (event) => {
+        seen.push("middleware:error");
+        middlewareErrorEvent = event;
+      });
+      runner.on("error", () => seen.push("error"));
+
+      await expect(runner.run(agent, { message: "Hi" })).rejects.toBeInstanceOf(MiddlewareExecutionError);
+      expect(seen).toEqual(["middleware:error", "error"]);
+      expect(middlewareErrorEvent?.middlewareName).toBe("BrokenMiddleware");
+      expect(provider.generate).not.toHaveBeenCalled();
     });
   });
 

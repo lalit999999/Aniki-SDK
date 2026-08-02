@@ -132,3 +132,99 @@ message from that turn.
 Streaming does not support tool calls in this release — `Runner.stream` throws
 `StreamingNotSupportedError` synchronously, before opening any request, if the agent has
 registered tools or its provider's `capabilities.streaming` is `false`.
+
+## Middleware
+
+Middleware wraps a single provider round trip — not the whole of `Runner.run` — so it composes
+safely with the tool loop: a retried attempt never replays session history, and a cache key stays
+meaningful per iteration. Pass middleware to `Runner` (runs first) and/or to `Agent` (runs after);
+with none configured, behavior is identical to not having the pipeline at all.
+
+```ts
+import { Agent, Runner, LoggingMiddleware, CacheMiddleware, RetryMiddleware, ConsoleLogger } from "aniki-sdk";
+
+const runner = new Runner(undefined, undefined, {
+  middleware: [
+    new LoggingMiddleware({ logger: new ConsoleLogger({ level: "info" }) }),
+    new CacheMiddleware({ ttlMs: 60_000 }),
+    new RetryMiddleware({ maxAttempts: 3 }),
+  ],
+});
+
+const result = await runner.run(agent, { message: "Hello" });
+```
+
+Write your own by extending `BaseMiddleware`:
+
+```ts
+import { BaseMiddleware } from "aniki-sdk";
+import type { MiddlewareRequest, MiddlewareNext } from "aniki-sdk";
+
+class TimingMiddleware extends BaseMiddleware {
+  constructor() {
+    super("TimingMiddleware");
+  }
+  async execute(request: MiddlewareRequest, next: MiddlewareNext) {
+    const start = Date.now();
+    const result = await next(request);
+    console.log(`${request.model} took ${Date.now() - start}ms`);
+    return result;
+  }
+}
+```
+
+`RetryMiddleware` only retries what the provider layer already marked transient (a
+`ProviderResponseError` with `retryable: true`, e.g. `RateLimitError`) — validation, tool, output,
+and auth errors rethrow immediately. `CacheMiddleware` never caches a response carrying
+`toolCalls`, since replaying one would re-trigger its side effect, and a broken cache backend
+degrades to a miss/no-op rather than failing the run.
+
+## Logging
+
+Every SDK component that logs depends on the `ILogger` interface, not `console` directly, and
+defaults to `NoopLogger` — nothing logs until you opt in:
+
+```ts
+import { ConsoleLogger } from "aniki-sdk";
+
+const logger = new ConsoleLogger({ level: "info", json: false });
+logger.info("run started", { runId: "abc-123" });
+
+const scoped = logger.child({ runId: "abc-123" });
+scoped.debug("below the info threshold, dropped");
+```
+
+Fields passed to any log call are redacted before writing — `apiKey`, `authorization`,
+`api_key`, `token`, `password`, and `secret` (case-insensitive, at any nesting depth) are replaced
+with `"[redacted]"`, so credentials can't leak into a log line even by accident.
+
+## Events
+
+`Runner` emits a canonical set of lifecycle events, plus the pre-existing, now-deprecated names
+immediately afterward for backward compatibility. Subscribe with `on` (returns an unsubscribe
+function), or `once`/`off` directly:
+
+```ts
+const unsubscribe = runner.on("llm:end", (event) => {
+  console.log(`${event.model} responded in ${event.durationMs}ms`);
+});
+
+runner.once("agent:end", (event) => console.log(`run ${event.runId} finished`));
+```
+
+| Event | Payload highlights |
+| --- | --- |
+| `agent:start` | `runId`, `agentName`, `model`, `providerName` |
+| `agent:end` | + `durationMs`, `iterations` |
+| `agent:error` | `agentName`, `error` |
+| `llm:start` | `iteration`, `messageCount` |
+| `llm:end` | + `durationMs`, `finishReason?`, `usage?` |
+| `llm:error` | `iteration`, `error` |
+| `tool:start` | `toolName`, `toolCallId`, `call` |
+| `tool:end` | + `durationMs`, `ok` |
+| `tool:error` | `toolName`, `toolCallId`, `error` (legacy `(context, call, error)` shape) |
+| `middleware:error` | `error`, `middlewareName?` |
+
+Event payloads are read-only and never carry credentials — listeners observe a run, they never
+influence it. `EVENT_NAMES` (a frozen tuple) and `LEGACY_EVENT_ALIASES` (canonical → deprecated
+name) are exported for callers that need to enumerate or validate against them.

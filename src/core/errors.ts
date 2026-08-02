@@ -316,3 +316,67 @@ export class StreamingNotSupportedError extends StreamError {
     this.reason = reason;
   }
 }
+
+/**
+ * Abstract base for every middleware-system error.
+ *
+ * Never thrown directly — see {@link MiddlewareExecutionError},
+ * {@link MiddlewareContractError}, {@link RetryExhaustedError}, and
+ * {@link CacheError}.
+ */
+export abstract class MiddlewareError extends AnikiError {}
+
+/** Thrown by {@link MiddlewarePipeline} when a middleware's `execute()` throws. Wraps the original failure in `cause`. */
+export class MiddlewareExecutionError extends MiddlewareError {
+  readonly code = "MIDDLEWARE_EXECUTION_FAILED";
+  /** The name of the middleware whose `execute()` threw. */
+  readonly middlewareName: string;
+
+  constructor(middlewareName: string, cause: unknown) {
+    const reason = cause instanceof Error ? cause.message : String(cause);
+    super(`Middleware "${middlewareName}" threw during execution: ${reason}`, cause);
+    this.name = "MiddlewareExecutionError";
+    this.middlewareName = middlewareName;
+  }
+}
+
+/** Thrown by {@link MiddlewarePipeline} when a middleware calls `next()` more than once, or resolves without returning a response. */
+export class MiddlewareContractError extends MiddlewareError {
+  readonly code = "MIDDLEWARE_CONTRACT_VIOLATION";
+  /** The name of the middleware that violated the pipeline contract. */
+  readonly middlewareName: string;
+
+  constructor(middlewareName: string, message: string) {
+    super(`Middleware "${middlewareName}" violated the pipeline contract: ${message}`);
+    this.name = "MiddlewareContractError";
+    this.middlewareName = middlewareName;
+  }
+}
+
+/** Thrown by {@link RetryMiddleware} when every configured attempt has been consumed without success. Wraps the last failure in `cause`. */
+export class RetryExhaustedError extends MiddlewareError {
+  readonly code = "RETRY_EXHAUSTED";
+  /** The number of attempts made before giving up. */
+  readonly attempts: number;
+
+  constructor(attempts: number, cause: unknown) {
+    const reason = cause instanceof Error ? cause.message : String(cause);
+    super(`Exhausted ${attempts} retry attempt(s); last failure: ${reason}`, cause);
+    this.name = "RetryExhaustedError";
+    this.attempts = attempts;
+  }
+}
+
+/** Thrown by {@link CacheMiddleware} when its underlying {@link ICacheStore} throws during a read or write. Wraps the original failure in `cause`. */
+export class CacheError extends MiddlewareError {
+  readonly code = "CACHE_ERROR";
+  /** Which cache operation failed. */
+  readonly operation: "get" | "set" | "delete";
+
+  constructor(operation: "get" | "set" | "delete", cause: unknown) {
+    const reason = cause instanceof Error ? cause.message : String(cause);
+    super(`Cache "${operation}" operation failed: ${reason}`, cause);
+    this.name = "CacheError";
+    this.operation = operation;
+  }
+}

@@ -1,7 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { Agent } from "./Agent.js";
-import { MaxToolIterationsError, ProviderError, ValidationError } from "./errors.js";
+import {
+  MaxToolIterationsError,
+  OutputParseError,
+  OutputValidationError,
+  ProviderError,
+  ValidationError,
+} from "./errors.js";
 import { Runner } from "./Runner.js";
 import { AuthenticationError } from "../providers/errors.js";
 import { Tool } from "../tools/Tool.js";
@@ -49,6 +55,19 @@ function createAgentWithTools(
   });
 }
 
+function createAgentWithOutput<TOutput>(
+  provider: IProvider,
+  output: z.ZodType<TOutput>,
+): Agent<TOutput> {
+  return new Agent({
+    name: "Assistant",
+    instructions: "You are a helpful assistant.",
+    model: "gpt-5.5",
+    provider,
+    output,
+  });
+}
+
 function makeWeatherTool(execute: (input: { city: string }) => Promise<{ tempC: number }>): Tool {
   return new Tool({
     name: "get_weather",
@@ -76,11 +95,20 @@ describe("Runner", () => {
     const result = await runner.run(agent, { message: "Hi, my name is Lalit." });
 
     expect(result.content).toBe("Hello, Lalit!");
+    expect(result.output).toBeUndefined();
     expect(result.runId).toEqual(expect.any(String));
     expect(result.messages).toEqual([
       { role: "user", content: "Hi, my name is Lalit." },
       { role: "assistant", content: "Hello, Lalit!" },
     ]);
+    expect(result.metadata).toEqual({
+      runId: result.runId,
+      model: "gpt-5.5",
+      provider: "fake",
+      durationMs: expect.any(Number),
+      iterations: 1,
+      streamed: false,
+    });
   });
 
   it("grows conversation history across sequential calls on the same session", async () => {
@@ -523,6 +551,162 @@ describe("Runner", () => {
       expect(finishedCalled).toBe(false);
       expect(errors).toHaveLength(1);
       expect(errors[0]?.message).toContain("nope");
+    });
+  });
+
+  describe("structured output", () => {
+    const userSchema = z.object({ name: z.string(), age: z.number() });
+
+    it("appends format instructions to, and never replaces, the system message", async () => {
+      const generate = vi
+        .fn<(request: ProviderRequest) => Promise<ProviderResponse>>()
+        .mockResolvedValue({ content: '{"name":"Lalit","age":30}', model: "gpt-5.5" });
+      const provider: IProvider = {
+        name: "fake",
+        capabilities: FAKE_CAPABILITIES,
+        generate,
+        generateStream: fakeGenerateStream,
+      };
+      const agent = createAgentWithOutput(provider, userSchema);
+      const runner = new Runner();
+
+      await runner.run(agent, { message: "Extract the user" });
+
+      const request = generate.mock.calls[0]?.[0] as ProviderRequest;
+      const systemMessage = request.messages[0];
+      expect(systemMessage?.role).toBe("system");
+      expect(systemMessage?.content).toContain(agent.instructions);
+      expect(systemMessage?.content).toContain("JSON");
+      expect(systemMessage?.content.length).toBeGreaterThan(agent.instructions.length);
+    });
+
+    it("does not alter the system message when the agent has no output schema", async () => {
+      const generate = vi
+        .fn<(request: ProviderRequest) => Promise<ProviderResponse>>()
+        .mockResolvedValue({ content: "hi", model: "gpt-5.5" });
+      const provider: IProvider = {
+        name: "fake",
+        capabilities: FAKE_CAPABILITIES,
+        generate,
+        generateStream: fakeGenerateStream,
+      };
+      const agent = createAgent(provider);
+      const runner = new Runner();
+
+      await runner.run(agent, { message: "Hi" });
+
+      const request = generate.mock.calls[0]?.[0] as ProviderRequest;
+      expect(request.messages[0]).toEqual({ role: "system", content: agent.instructions });
+    });
+
+    it("parses and validates the final response into result.output", async () => {
+      const provider: IProvider = {
+        name: "fake",
+        capabilities: FAKE_CAPABILITIES,
+        generate: vi.fn(async (): Promise<ProviderResponse> => ({
+          content: 'Sure:\n```json\n{"name":"Lalit","age":30}\n```',
+          model: "gpt-5.5",
+        })),
+        generateStream: fakeGenerateStream,
+      };
+      const agent = createAgentWithOutput(provider, userSchema);
+      const runner = new Runner();
+
+      const result = await runner.run(agent, { message: "Extract the user" });
+
+      expect(result.output).toEqual({ name: "Lalit", age: 30 });
+      expect(result.content).toBe('Sure:\n```json\n{"name":"Lalit","age":30}\n```');
+    });
+
+    it("throws OutputParseError when the response has no JSON payload, after persisting the assistant message", async () => {
+      const provider: IProvider = {
+        name: "fake",
+        capabilities: FAKE_CAPABILITIES,
+        generate: vi.fn(async (): Promise<ProviderResponse> => ({
+          content: "Sorry, I can't help with that.",
+          model: "gpt-5.5",
+        })),
+        generateStream: fakeGenerateStream,
+      };
+      const agent = createAgentWithOutput(provider, userSchema);
+      const runner = new Runner();
+
+      await expect(runner.run(agent, { message: "Extract the user" })).rejects.toThrow(
+        OutputParseError,
+      );
+      expect(agent.session.getMessages()).toContainEqual({
+        role: "assistant",
+        content: "Sorry, I can't help with that.",
+      });
+    });
+
+    it("throws OutputValidationError when the parsed JSON fails the schema", async () => {
+      const provider: IProvider = {
+        name: "fake",
+        capabilities: FAKE_CAPABILITIES,
+        generate: vi.fn(async (): Promise<ProviderResponse> => ({
+          content: '{"name":"Lalit"}',
+          model: "gpt-5.5",
+        })),
+        generateStream: fakeGenerateStream,
+      };
+      const agent = createAgentWithOutput(provider, userSchema);
+      const runner = new Runner();
+
+      await expect(runner.run(agent, { message: "Extract the user" })).rejects.toThrow(
+        OutputValidationError,
+      );
+    });
+
+    it("emits an error event before throwing on invalid structured output", async () => {
+      const provider: IProvider = {
+        name: "fake",
+        capabilities: FAKE_CAPABILITIES,
+        generate: vi.fn(async (): Promise<ProviderResponse> => ({
+          content: "not json",
+          model: "gpt-5.5",
+        })),
+        generateStream: fakeGenerateStream,
+      };
+      const agent = createAgentWithOutput(provider, userSchema);
+      const runner = new Runner();
+      const seen: string[] = [];
+      runner.on("error", () => seen.push("error"));
+      runner.on("agent:finished", () => seen.push("agent:finished"));
+
+      await expect(runner.run(agent, { message: "Extract the user" })).rejects.toThrow(
+        OutputParseError,
+      );
+      expect(seen).toEqual(["error"]);
+    });
+
+    it("populates metadata with finishReason and usage from the final response", async () => {
+      const provider: IProvider = {
+        name: "fake",
+        capabilities: FAKE_CAPABILITIES,
+        generate: vi.fn(async (): Promise<ProviderResponse> => ({
+          content: '{"name":"Lalit","age":30}',
+          model: "gpt-5.5",
+          finishReason: "stop",
+          usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+        })),
+        generateStream: fakeGenerateStream,
+      };
+      const agent = createAgentWithOutput(provider, userSchema);
+      const runner = new Runner();
+
+      const result = await runner.run(agent, { message: "Extract the user" });
+
+      expect(result.metadata).toEqual({
+        runId: result.runId,
+        model: "gpt-5.5",
+        provider: "fake",
+        finishReason: "stop",
+        usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+        durationMs: expect.any(Number),
+        iterations: 1,
+        streamed: false,
+      });
     });
   });
 });

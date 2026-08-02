@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { Aniki } from "../config/Config.js";
 import { ConfigurationError } from "../core/errors.js";
 import type { IProvider } from "./AIProvider.js";
+import { OPENROUTER_DEFAULT_BASE_URL, OpenAIProvider } from "./openai/OpenAIProvider.js";
 import { ProviderFactory } from "./ProviderFactory.js";
 import { ProviderRegistry } from "./ProviderRegistry.js";
 
@@ -115,5 +116,29 @@ describe("ProviderFactory", () => {
     registry.register("custom", () => createFakeProvider());
 
     expect(() => ProviderFactory.create("custom", {}, registry)).not.toThrow();
+  });
+
+  it("lazily registers openrouter as a built-in OpenAI-wire-compatible provider", () => {
+    const registry = new ProviderRegistry();
+    expect(registry.has("openrouter")).toBe(false);
+
+    const provider = ProviderFactory.create("openrouter", { apiKey: "sk-or-test" }, registry);
+
+    expect(registry.has("openrouter")).toBe(true);
+    expect(provider).toBeInstanceOf(OpenAIProvider);
+    expect(provider.name).toBe("openrouter");
+  });
+
+  it("leaves openai provider creation completely unchanged after openrouter registration", () => {
+    const registry = new ProviderRegistry();
+
+    const provider = ProviderFactory.create("openai", { apiKey: "sk-test" }, registry);
+
+    expect(provider).toBeInstanceOf(OpenAIProvider);
+    expect(provider.name).toBe("openai");
+  });
+
+  it("exports OpenRouter's default base URL as a named constant", () => {
+    expect(OPENROUTER_DEFAULT_BASE_URL).toBe("https://openrouter.ai/api/v1");
   });
 });

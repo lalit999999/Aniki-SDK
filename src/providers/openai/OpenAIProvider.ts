@@ -18,6 +18,9 @@ import { OpenAIResponseParser } from "./OpenAIResponseParser.js";
 /** The default OpenAI API base URL, used when {@link ProviderConfig.baseURL} is omitted. */
 export const DEFAULT_BASE_URL = "https://api.openai.com/v1";
 
+/** OpenRouter's OpenAI-wire-compatible base URL, used as {@link OpenAIProvider}'s default when constructed for the `"openrouter"` provider (see {@link registerBuiltInProviders}). */
+export const OPENROUTER_DEFAULT_BASE_URL = "https://openrouter.ai/api/v1";
+
 const DEFAULT_TIMEOUT_MS = 30000;
 const CHAT_COMPLETIONS_PATH = "/chat/completions";
 
@@ -33,6 +36,20 @@ export interface OpenAIProviderDependencies {
   readonly httpClient?: IHttpClient;
   /** The auth strategy to attach credentials with. Defaults to a {@link BearerAuthStrategy}. */
   readonly authStrategy?: IAuthStrategy;
+  /**
+   * The name this provider instance reports via {@link IProvider.name}.
+   * Defaults to `"openai"`. Set this when composing {@link OpenAIProvider}
+   * for another OpenAI-wire-compatible gateway (e.g. `"openrouter"`) so a
+   * run's reported provider names the gateway actually in use, not
+   * `"openai"`.
+   */
+  readonly name?: string;
+  /**
+   * The base URL used when {@link ProviderConfig.baseURL} is omitted.
+   * Defaults to {@link DEFAULT_BASE_URL}. An explicit `config.baseURL`
+   * always wins over this.
+   */
+  readonly defaultBaseURL?: string;
 }
 
 async function drain(byteStream: AsyncIterable<Uint8Array>): Promise<string> {
@@ -61,7 +78,7 @@ async function drain(byteStream: AsyncIterable<Uint8Array>): Promise<string> {
  * ```
  */
 export class OpenAIProvider implements IProvider {
-  readonly name = "openai";
+  readonly name: string;
   readonly capabilities: ProviderCapabilities = {
     streaming: true,
     toolCalling: false,
@@ -85,7 +102,8 @@ export class OpenAIProvider implements IProvider {
       );
     }
 
-    this.baseURL = result.data.baseURL ?? DEFAULT_BASE_URL;
+    this.name = deps.name ?? "openai";
+    this.baseURL = result.data.baseURL ?? deps.defaultBaseURL ?? DEFAULT_BASE_URL;
     this.timeoutMs = result.data.timeout ?? DEFAULT_TIMEOUT_MS;
     this.httpClient =
       deps.httpClient ??
@@ -96,16 +114,17 @@ export class OpenAIProvider implements IProvider {
   /** Requests a single completion from the underlying model. */
   async generate(request: ProviderRequest): Promise<ProviderResponse> {
     const body = this.requestBuilder.build(request);
+    const url = this.endpointURL();
     const response = await this.httpClient.request({
       method: "POST",
-      url: `${this.baseURL}${CHAT_COMPLETIONS_PATH}`,
+      url,
       headers: this.headers(),
       body: JSON.stringify(body),
       timeoutMs: this.timeoutMs,
     });
 
     if (response.status < 200 || response.status >= 300) {
-      this.errorTranslator.translate(response.status, response.body, response.headers);
+      this.errorTranslator.translate(response.status, response.body, response.headers, url);
     }
 
     return this.responseParser.parse(response.body);
@@ -114,9 +133,10 @@ export class OpenAIProvider implements IProvider {
   /** Requests a streamed completion, yielding incremental chunks as they arrive. */
   async *generateStream(request: ProviderRequest): AsyncIterable<ProviderStreamChunk> {
     const body = this.requestBuilder.buildStream(request);
+    const url = this.endpointURL();
     const response = await this.httpClient.requestStream({
       method: "POST",
-      url: `${this.baseURL}${CHAT_COMPLETIONS_PATH}`,
+      url,
       headers: this.headers(),
       body: JSON.stringify(body),
       timeoutMs: this.timeoutMs,
@@ -124,7 +144,7 @@ export class OpenAIProvider implements IProvider {
 
     if (response.status < 200 || response.status >= 300) {
       const bodyText = await drain(response.body);
-      this.errorTranslator.translate(response.status, bodyText, response.headers);
+      this.errorTranslator.translate(response.status, bodyText, response.headers, url);
     }
 
     yield* this.responseParser.parseStream(response.body);
@@ -132,5 +152,10 @@ export class OpenAIProvider implements IProvider {
 
   private headers(): Readonly<Record<string, string>> {
     return { "content-type": "application/json", ...this.authStrategy.getHeaders() };
+  }
+
+  /** Joins {@link baseURL} and {@link CHAT_COMPLETIONS_PATH}, stripping any trailing slash(es) from the base first so a `baseURL` like `".../v1/"` never produces a doubled `//` in the request URL. */
+  private endpointURL(): string {
+    return `${this.baseURL.replace(/\/+$/, "")}${CHAT_COMPLETIONS_PATH}`;
   }
 }

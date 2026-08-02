@@ -1,11 +1,15 @@
 {
   "name": "aniki-sdk",
-  "version": "0.1.0",
+  "version": "1.1.0",
   "description": "A TypeScript, provider-agnostic AI Agent SDK for building production-ready AI agents.",
+  "license": "MIT",
+  "author": "Lalit",
+  "type": "module",
+
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "type": "module",
+
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -18,43 +22,78 @@
       "require": "./dist/testing/index.cjs"
     }
   },
+
   "files": [
-    "dist"
+    "dist",
+    "README.md",
+    "LICENSE"
   ],
+
   "sideEffects": false,
+
   "engines": {
     "node": ">=18"
   },
+
+  "publishConfig": {
+    "access": "public"
+  },
+
   "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "build": "tsup",
-    "dev": "tsup --watch",
+
+    "smoke": "npm run build && node --env-file-if-exists=.env index.js",
+    "smoke:offline": "node index.js",
+
     "lint": "eslint src",
     "lint:fix": "eslint src --fix",
+
     "format": "prettier --write src",
     "format:check": "prettier --check src",
+
     "typecheck": "tsc --noEmit",
-    "verify": "npm run typecheck && npm run lint && npm test"
+
+    "verify": "npm run typecheck && npm run lint && npm test",
+
+    "prepublishOnly": "npm run build && npm run verify"
   },
+
   "keywords": [
     "ai",
     "agent",
+    "agent-sdk",
     "llm",
-    "sdk",
     "typescript",
     "openai",
+    "anthropic",
+    "provider",
+    "sdk",
     "tools"
   ],
+
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/lalit999999/Own-Agent-sdk.git"
+    "url": "git+https://github.com/lalit999999/Aniki-SDK.git"
   },
-  "author": "",
-  "license": "ISC",
+
+  "homepage": "https://github.com/lalit999999/Aniki-SDK#readme",
+
+  "bugs": {
+    "url": "https://github.com/lalit999999/Aniki-SDK/issues"
+  },
+
+  "dependencies": {
+    "zod": "^4.4.3"
+  },
+
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@types/node": "^26.1.2",
     "@vitest/coverage-v8": "^4.1.10",
     "eslint": "^10.8.0",
     "eslint-config-prettier": "^10.1.8",
@@ -63,9 +102,5 @@
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.65.0",
     "vitest": "^4.1.10"
-  },
-  "dependencies": {
-    "@types/node": "^26.1.2",
-    "zod": "^4.4.3"
   }
 }

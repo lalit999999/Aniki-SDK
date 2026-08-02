@@ -7,7 +7,7 @@ import type {
   IHttpClient,
 } from "../http/HttpClient.js";
 import { ProviderTimeoutError } from "../errors.js";
-import { DEFAULT_BASE_URL, OpenAIProvider } from "./OpenAIProvider.js";
+import { DEFAULT_BASE_URL, OPENROUTER_DEFAULT_BASE_URL, OpenAIProvider } from "./OpenAIProvider.js";
 
 function jsonBody(overrides: Partial<Record<string, unknown>> = {}): string {
   return JSON.stringify({
@@ -106,6 +106,75 @@ describe("OpenAIProvider", () => {
   });
 
   it.each([
+    ["no trailing slash", "https://custom.example.com/v1"],
+    ["one trailing slash", "https://custom.example.com/v1/"],
+    ["multiple trailing slashes", "https://custom.example.com/v1///"],
+  ])(
+    "normalizes the base URL (%s) before appending the chat completions path",
+    async (_label, baseURL) => {
+      const httpClient = new StubHttpClient({ status: 200, headers: {}, body: jsonBody() });
+      const provider = new OpenAIProvider({ apiKey: "sk-test", baseURL }, { httpClient });
+
+      await provider.generate({ model: "gpt-5.5", messages: [{ role: "user", content: "Hi" }] });
+
+      expect(httpClient.lastRequest?.url).toBe("https://custom.example.com/v1/chat/completions");
+    },
+  );
+
+  it.each([
+    ["no trailing slash", "https://custom.example.com/v1"],
+    ["one trailing slash", "https://custom.example.com/v1/"],
+    ["multiple trailing slashes", "https://custom.example.com/v1///"],
+  ])(
+    "normalizes the base URL (%s) before appending the chat completions path when streaming",
+    async (_label, baseURL) => {
+      const httpClient = new StubHttpClient(
+        { status: 200, headers: {}, body: "" },
+        { status: 200, headers: {}, body: toByteStream([`data: [DONE]\n\n`]) },
+      );
+      const provider = new OpenAIProvider({ apiKey: "sk-test", baseURL }, { httpClient });
+
+      await collect(
+        provider.generateStream({ model: "gpt-5.5", messages: [{ role: "user", content: "Hi" }] }),
+      );
+
+      expect(httpClient.lastRequest?.url).toBe("https://custom.example.com/v1/chat/completions");
+    },
+  );
+
+  it("reports 'openai' and DEFAULT_BASE_URL when constructed with no name/defaultBaseURL deps", async () => {
+    const httpClient = new StubHttpClient({ status: 200, headers: {}, body: jsonBody() });
+    const provider = new OpenAIProvider({ apiKey: "sk-test" }, { httpClient });
+
+    expect(provider.name).toBe("openai");
+    await provider.generate({ model: "gpt-5.5", messages: [{ role: "user", content: "Hi" }] });
+    expect(httpClient.lastRequest?.url).toBe(`${DEFAULT_BASE_URL}/chat/completions`);
+  });
+
+  it("reports a custom name and uses defaultBaseURL when neither is overridden by config", async () => {
+    const httpClient = new StubHttpClient({ status: 200, headers: {}, body: jsonBody() });
+    const provider = new OpenAIProvider(
+      { apiKey: "sk-or-test" },
+      { httpClient, name: "openrouter", defaultBaseURL: OPENROUTER_DEFAULT_BASE_URL },
+    );
+
+    expect(provider.name).toBe("openrouter");
+    await provider.generate({ model: "gpt-5.5", messages: [{ role: "user", content: "Hi" }] });
+    expect(httpClient.lastRequest?.url).toBe(`${OPENROUTER_DEFAULT_BASE_URL}/chat/completions`);
+  });
+
+  it("lets an explicit config.baseURL win over defaultBaseURL", async () => {
+    const httpClient = new StubHttpClient({ status: 200, headers: {}, body: jsonBody() });
+    const provider = new OpenAIProvider(
+      { apiKey: "sk-or-test", baseURL: "https://custom.example.com/v1" },
+      { httpClient, name: "openrouter", defaultBaseURL: OPENROUTER_DEFAULT_BASE_URL },
+    );
+
+    await provider.generate({ model: "gpt-5.5", messages: [{ role: "user", content: "Hi" }] });
+    expect(httpClient.lastRequest?.url).toBe("https://custom.example.com/v1/chat/completions");
+  });
+
+  it.each([
     [401, "AuthenticationError"],
     [403, "AuthenticationError"],
     [404, "InvalidRequestError"],
@@ -182,6 +251,27 @@ describe("OpenAIProvider", () => {
     );
 
     expect(chunks).toEqual([{ delta: "Hello", finishReason: "stop" }]);
+  });
+
+  it("produces a bounded, readable message for a non-JSON HTML error response, not a raw body dump", async () => {
+    const html = `<!DOCTYPE html><html><head><title>404</title></head><body>${"not found ".repeat(50)}</body></html>`;
+    const httpClient = new StubHttpClient({
+      status: 404,
+      headers: { "content-type": "text/html" },
+      body: html,
+    });
+    const provider = new OpenAIProvider(
+      { apiKey: "sk-test", baseURL: "https://openrouter.ai/v1" },
+      { httpClient },
+    );
+
+    await expect(
+      provider.generate({ model: "gpt-5.5", messages: [{ role: "user", content: "Hi" }] }),
+    ).rejects.toMatchObject({
+      name: "InvalidRequestError",
+      message:
+        "OpenAI request failed with status 404 (non-JSON HTML response) — https://openrouter.ai/v1/chat/completions",
+    });
   });
 
   it("translates an error response encountered while streaming", async () => {

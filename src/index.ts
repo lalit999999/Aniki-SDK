@@ -77,7 +77,11 @@ export type {
   IHttpClient,
 } from "./providers/http/HttpClient.js";
 
-export { DEFAULT_BASE_URL, OpenAIProvider } from "./providers/openai/OpenAIProvider.js";
+export {
+  DEFAULT_BASE_URL,
+  OPENROUTER_DEFAULT_BASE_URL,
+  OpenAIProvider,
+} from "./providers/openai/OpenAIProvider.js";
 export type { OpenAIProviderDependencies } from "./providers/openai/OpenAIProvider.js";
 
 export { ProviderFactory, registerBuiltInProviders } from "./providers/ProviderFactory.js";

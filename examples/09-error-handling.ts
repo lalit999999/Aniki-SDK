@@ -16,7 +16,7 @@ import {
 
 function narrowingWithIsAnikiError(): void {
   try {
-    throw new ValidationError({ subject: "example", reason: "demo", received: null });
+    throw new ValidationError("Agent.name must be a non-empty string.", { subject: "Agent.name" });
   } catch (error) {
     if (isAnikiError(error)) {
       console.error(error.code, error.message, error.context);
@@ -83,13 +83,16 @@ async function runAndLog(work: () => Promise<void>): Promise<void> {
 async function main(): Promise<void> {
   narrowingWithIsAnikiError();
   validationErrorShape();
-  handleProviderError(new RateLimitError({ providerName: "openai", retryAfterSeconds: 5 }));
-  handleOutputError(new OutputParseError({ raw: "not json" }));
+  handleProviderError(new RateLimitError("Rate limit exceeded.", "openai", { retryAfterSeconds: 5 }));
+  handleOutputError(new OutputParseError("No JSON payload found in model response.", "not json"));
   retryMiddlewareSetup();
-  console.log("shouldRetry(new RateLimitError(...)):", shouldRetry(new RateLimitError({ providerName: "openai" })));
+  console.log(
+    "shouldRetry(new RateLimitError(...)):",
+    shouldRetry(new RateLimitError("Rate limit exceeded.", "openai")),
+  );
 
   await runAndLog(async () => {
-    throw new ValidationError({ subject: "demo", reason: "logging example", received: null });
+    throw new ValidationError("demo: logging example", { subject: "demo" });
   });
 }
 

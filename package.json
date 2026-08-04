@@ -5,11 +5,9 @@
   "license": "MIT",
   "author": "Lalit",
   "type": "module",
-
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
-
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -22,47 +20,36 @@
       "require": "./dist/testing/index.cjs"
     }
   },
-
   "files": [
     "dist",
     "README.md",
     "LICENSE"
   ],
-
   "sideEffects": false,
-
   "engines": {
     "node": ">=18"
   },
-
   "publishConfig": {
     "access": "public"
   },
-
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
-
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-
     "smoke": "npm run build && node --env-file-if-exists=.env index.js",
     "smoke:offline": "node index.js",
 
+    "example": "npm run build && tsx",
     "lint": "eslint src",
     "lint:fix": "eslint src --fix",
-
     "format": "prettier --write src",
     "format:check": "prettier --check src",
-
     "typecheck": "tsc --noEmit",
-
     "verify": "npm run typecheck && npm run lint && npm test",
-
     "prepublishOnly": "npm run build && npm run verify"
   },
-
   "keywords": [
     "ai",
     "agent",
@@ -75,22 +62,17 @@
     "sdk",
     "tools"
   ],
-
   "repository": {
     "type": "git",
     "url": "git+https://github.com/lalit999999/Aniki-SDK.git"
   },
-
   "homepage": "https://github.com/lalit999999/Aniki-SDK#readme",
-
   "bugs": {
     "url": "https://github.com/lalit999999/Aniki-SDK/issues"
   },
-
   "dependencies": {
     "zod": "^4.4.3"
   },
-
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@types/node": "^26.1.2",
@@ -99,6 +81,7 @@
     "eslint-config-prettier": "^10.1.8",
     "prettier": "^3.9.6",
     "tsup": "^8.5.1",
+    "tsx": "^4.23.5",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.65.0",
     "vitest": "^4.1.10"
